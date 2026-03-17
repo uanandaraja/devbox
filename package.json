@@ -1,0 +1,24 @@
+{
+  "name": "devbox-e2b",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.2.12",
+  "scripts": {
+    "build:template:dev": "bun run src/e2b/build-template.ts devbox-dev",
+    "build:template:prod": "bun run src/e2b/build-template.ts devbox",
+    "sandbox:create": "bun run src/e2b/create-sandbox.ts",
+    "sandbox:list": "bun run src/e2b/list-sandboxes.ts",
+    "sandbox:connect": "bun run src/e2b/connect-sandbox.ts",
+    "sandbox:ssh": "bun run src/e2b/ssh-sandbox.ts",
+    "sandbox:pause": "bun run src/e2b/pause-sandbox.ts",
+    "sandbox:resume": "bun run src/e2b/resume-sandbox.ts",
+    "sandbox:kill": "bun run src/e2b/kill-sandbox.ts"
+  },
+  "dependencies": {
+    "e2b": "^2.8.3"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.12",
+    "typescript": "^5.8.3"
+  }
+}

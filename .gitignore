@@ -1,6 +1,8 @@
 .DS_Store
 .env
 .env.*
+!.env.example
+dist/
 
 data/
 .data/
@@ -11,6 +13,7 @@ data/
 .vercel/
 
 node_modules/
+.e2b/
 
 .claude/
 .codex/

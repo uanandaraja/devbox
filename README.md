@@ -1,41 +1,83 @@
-# railway devbox
+# e2b devbox
 
-mount volume: `/data`
-
-set vars:
+vars:
 
 ```bash
-TAILSCALE_AUTHKEY=tskey-xxxxxxxx
-TAILSCALE_HOSTNAME=railway-devbox
-TAILSCALE_ACCEPT_ROUTES=false
-TAILSCALE_ENABLE_SSH=true
-TAILSCALE_ADVERTISE_TAGS=
-GH_TOKEN=gho_xxx
+cp .env.example .env
+export E2B_API_KEY=...
 ```
 
-deploy:
+install:
 
 ```bash
-railway up --service devbox2
+bun install
+```
+
+build template:
+
+```bash
+bun run build:template:dev
+```
+
+create sandbox:
+
+```bash
+bun run sandbox:create
+```
+
+list sandboxes:
+
+```bash
+bun run sandbox:list
 ```
 
 connect:
 
 ```bash
-tailscale ssh root@railway-devbox
+bun run sandbox:connect <sandbox-id>
 ```
 
-quick check:
+ssh:
 
 ```bash
-node -v
-npm -v
-bun -v
-gh --version
-python3 --version
-uv --version
-git --version
-fish --version
-rg --version
-tailscale --socket=/tmp/tailscaled.sock status
+bun run sandbox:ssh <sandbox-id>
+```
+
+pause:
+
+```bash
+bun run sandbox:pause <sandbox-id>
+```
+
+resume:
+
+```bash
+bun run sandbox:resume <sandbox-id>
+```
+
+use `sandbox:resume` before `e2b sandbox connect` if the sandbox is paused. that resets timeout back to your configured value.
+
+kill:
+
+```bash
+bun run sandbox:kill <sandbox-id>
+```
+
+installed in sandbox:
+
+```bash
+node
+npm
+bun
+git
+gh
+python3
+uv
+nvim
+tmux
+rg
+codex
+claude
+opencode
+pi
 ```
