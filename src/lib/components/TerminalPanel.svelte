@@ -53,11 +53,22 @@
     socket.send(JSON.stringify({ type: "resize", cols: xterm.cols, rows: xterm.rows }));
   }
 
+  function focusTerminal() {
+    if (!xterm) return;
+
+    terminalElement?.focus();
+    xterm.focus();
+
+    requestAnimationFrame(() => {
+      xterm?.focus();
+    });
+  }
+
   function syncActiveTerminal() {
     if (!active || !xterm) return;
     fitAddon?.fit();
     sendResize();
-    xterm.focus();
+    focusTerminal();
   }
 
   async function openTerminal() {
@@ -292,8 +303,12 @@
   {:else}
     <!-- Terminal -->
     <div class="terminal-shell flex-1 overflow-hidden">
-      <div class="h-full p-1">
-        <div class="h-full rounded-[calc(var(--radius)-0.2rem)]" bind:this={terminalElement}></div>
+        <div class="h-full p-1">
+        <div
+          class="h-full rounded-[calc(var(--radius)-0.2rem)] outline-none"
+          bind:this={terminalElement}
+          tabindex="-1"
+        ></div>
       </div>
     </div>
   {/if}
