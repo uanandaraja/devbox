@@ -1,8 +1,11 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { invalidateAll } from "$app/navigation";
-  import type { FitAddon as GhosttyFitAddon, Terminal as GhosttyTerminal } from "ghostty-web";
-  import type { BrowserSession, ListedSandbox } from "$lib/devbox/types";
+  import type {
+    FitAddon as GhosttyFitAddon,
+    Terminal as GhosttyTerminal,
+  } from "ghostty-web";
+  import type { DesktopSession, ListedSandbox } from "$lib/devbox/types";
   import {
     killSandboxCommand,
     pauseSandboxCommand,
@@ -11,6 +14,7 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import {
     ArrowCounterClockwise,
+    ArrowSquareOut,
     Globe,
     Pause,
     Play,
@@ -33,10 +37,9 @@
   let terminalState = $state<"idle" | "connecting" | "open" | "closed" | "error">("idle");
   let terminalError = $state("");
   let panelMode = $state<"terminal" | "browser">("terminal");
-  let browserState = $state<BrowserSession["status"]>("idle");
+  let browserState = $state<DesktopSession["status"]>("idle");
   let browserError = $state("");
   let browserUrl = $state("");
-  let browserNonce = $state(0);
   let actionPending = $state(false);
   let actionError = $state("");
 
@@ -50,7 +53,9 @@
 
   function cssVar(name: string, fallback: string) {
     if (typeof document === "undefined") return fallback;
-    return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+    return (
+      getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
+    );
   }
 
   function cleanupSocket() {
@@ -81,7 +86,6 @@
     if (!active || panelMode !== "terminal" || !xterm) return;
 
     const currentRun = ++focusRun;
-
     await tick();
 
     if (currentRun !== focusRun || !active || !xterm) return;
@@ -158,6 +162,55 @@
     };
   }
 
+  async function loadBrowser() {
+    if (sandbox.state !== "running") return;
+
+    browserState = "starting";
+    browserError = "";
+
+    const response = await fetch(`/api/desktop/${sandbox.sandboxID}/session`);
+    const payload = (await response.json().catch(() => null)) as DesktopSession | null;
+
+    if (!response.ok || !payload || payload.status !== "open" || !payload.url) {
+      browserState = "error";
+      browserError =
+        payload?.status === "error"
+          ? "Desktop failed to start"
+          : "Failed to open remote desktop";
+      browserUrl = "";
+      return;
+    }
+
+    browserState = "open";
+    browserError = "";
+    browserUrl = payload.url;
+  }
+
+  async function reconnectBrowser() {
+    await loadBrowser();
+    await syncActiveBrowser();
+  }
+
+  function openBrowserInNewTab() {
+    if (!browserUrl) return;
+    window.open(browserUrl, "_blank", "noopener,noreferrer");
+  }
+
+  async function showTerminal() {
+    panelMode = "terminal";
+    await syncActiveTerminal();
+  }
+
+  async function showBrowser() {
+    panelMode = "browser";
+
+    if (browserState === "idle" || browserState === "error") {
+      await loadBrowser();
+    }
+
+    await syncActiveBrowser();
+  }
+
   async function handleResume() {
     actionPending = true;
     actionError = "";
@@ -165,16 +218,11 @@
       await resumeSandboxCommand({ sandboxId: sandbox.sandboxID });
       await invalidateAll();
       await tick();
-      switch (panelMode) {
-        case "browser": {
-          await openBrowser();
-          break;
-        }
-        case "terminal":
-        default: {
-          await openTerminal();
-          break;
-        }
+      if (panelMode === "browser") {
+        await loadBrowser();
+        await syncActiveBrowser();
+      } else {
+        await openTerminal();
       }
     } catch (err) {
       actionError = err instanceof Error ? err.message : "Failed to resume";
@@ -213,48 +261,6 @@
     } finally {
       actionPending = false;
     }
-  }
-
-  function getBrowserProxyUrl() {
-    const url = new URL(`/api/browser/${sandbox.sandboxID}`, window.location.origin);
-    url.searchParams.set("nonce", String(browserNonce));
-    return url.toString();
-  }
-
-  async function openBrowser() {
-    if (sandbox.state !== "running") return;
-    browserState = "starting";
-    browserError = "";
-
-    if (!browserUrl) {
-      browserNonce += 1;
-    }
-
-    browserUrl = getBrowserProxyUrl();
-    panelMode = "browser";
-    await syncActiveBrowser();
-  }
-
-  async function reconnectBrowser() {
-    browserNonce += 1;
-    browserUrl = "";
-    await openBrowser();
-  }
-
-  async function showTerminal() {
-    panelMode = "terminal";
-    await syncActiveTerminal();
-  }
-
-  async function showBrowser() {
-    panelMode = "browser";
-
-    if (browserState === "idle" || !browserUrl) {
-      await openBrowser();
-      return;
-    }
-
-    await syncActiveBrowser();
   }
 
   onMount(() => {
@@ -331,7 +337,6 @@
 </script>
 
 <div class="flex h-full flex-col bg-background">
-  <!-- Top bar -->
   <div class="flex h-10 flex-shrink-0 items-center justify-between border-b border-sidebar-divider px-4">
     <div class="flex items-center gap-3">
       <div class="flex items-center gap-1 rounded-md border border-border/60 bg-field/40 p-0.5">
@@ -360,11 +365,11 @@
       <span class="text-sm text-foreground/40 capitalize">{sandbox.state}</span>
       {#if panelMode === "browser"}
         {#if browserState === "starting"}
-          <span class="text-sm text-foreground/30">starting browser...</span>
+          <span class="text-sm text-foreground/30">starting desktop...</span>
         {:else if browserState === "open"}
-          <span class="text-sm text-foreground/30">browser ready</span>
+          <span class="text-sm text-foreground/30">desktop connected</span>
         {:else if browserState === "error"}
-          <span class="text-sm text-destructive/70">browser error</span>
+          <span class="text-sm text-destructive/70">desktop error</span>
         {/if}
       {:else if terminalState === "connecting"}
         <span class="text-sm text-foreground/30">connecting...</span>
@@ -384,20 +389,29 @@
           variant="ghost"
           onclick={reconnectBrowser}
           disabled={sandbox.state !== "running" || actionPending}
-          title="Reconnect browser"
+          title="Reconnect desktop"
         >
           <ArrowCounterClockwise class="size-3.5" />
         </Button>
+        <Button
+          size="xs"
+          variant="ghost"
+          onclick={openBrowserInNewTab}
+          disabled={!browserUrl || actionPending}
+          title="Open desktop in new tab"
+        >
+          <ArrowSquareOut class="size-3.5" />
+        </Button>
       {:else}
-      <Button
-        size="xs"
-        variant="ghost"
-        onclick={() => openTerminal()}
-        disabled={sandbox.state !== "running" || actionPending}
-        title="Reconnect"
-      >
-        <ArrowCounterClockwise class="size-3.5" />
-      </Button>
+        <Button
+          size="xs"
+          variant="ghost"
+          onclick={() => openTerminal()}
+          disabled={sandbox.state !== "running" || actionPending}
+          title="Reconnect"
+        >
+          <ArrowCounterClockwise class="size-3.5" />
+        </Button>
       {/if}
       {#if sandbox.state === "paused"}
         <Button size="xs" variant="ghost" onclick={handleResume} disabled={actionPending}>
@@ -423,7 +437,6 @@
     </div>
   </div>
 
-  <!-- Error banner -->
   {#if actionError}
     <div class="flex items-center gap-2 border-b border-destructive/20 bg-destructive/10 px-4 py-2 text-sm text-destructive">
       <WarningCircle class="size-3.5 flex-shrink-0" />
@@ -431,14 +444,20 @@
     </div>
   {/if}
 
-  {#if browserError}
+  {#if browserError && panelMode === "browser"}
     <div class="flex items-center gap-2 border-b border-destructive/20 bg-destructive/10 px-4 py-2 text-sm text-destructive">
       <WarningCircle class="size-3.5 flex-shrink-0" />
       {browserError}
     </div>
   {/if}
 
-  <!-- Paused notice -->
+  {#if terminalError && panelMode === "terminal"}
+    <div class="flex items-center gap-2 border-b border-destructive/20 bg-destructive/10 px-4 py-2 text-sm text-destructive">
+      <WarningCircle class="size-3.5 flex-shrink-0" />
+      {terminalError}
+    </div>
+  {/if}
+
   {#if sandbox.state === "paused"}
     <div class="flex flex-1 items-center justify-center">
       <div class="text-center">
@@ -451,7 +470,7 @@
     </div>
   {:else}
     <div class:hidden={panelMode !== "terminal"} class="terminal-shell flex-1 overflow-hidden">
-        <div class="h-full p-1">
+      <div class="h-full p-1">
         <div
           class="h-full rounded-[calc(var(--radius)-0.2rem)] outline-none"
           bind:this={terminalElement}
@@ -461,26 +480,15 @@
     </div>
 
     <div class:hidden={panelMode !== "browser"} class="flex flex-1 flex-col overflow-hidden">
-      <div class="border-b border-sidebar-divider px-4 py-2 text-xs text-foreground/45">
-        Use the browser address bar inside the sandbox for local URLs like
-        <span class="font-mono text-foreground/60"> http://127.0.0.1:5173</span>.
-      </div>
-
-      {#if browserState === "idle"}
+      {#if browserState === "starting"}
         <div class="flex flex-1 items-center justify-center">
-          <div class="text-center">
-            <p class="text-sm text-foreground/50">Browser is not running yet</p>
-            <Button size="sm" class="mt-4" onclick={openBrowser} disabled={actionPending}>
-              <Globe class="size-3.5" />
-              Open browser
-            </Button>
-          </div>
+          <p class="text-sm text-foreground/40">Starting remote desktop...</p>
         </div>
-      {:else}
+      {:else if browserState === "open" && browserUrl}
         <div class="min-h-0 flex-1 p-1">
           <iframe
-            title={`Browser for ${sandbox.metadata?.repoName ?? sandbox.sandboxID}`}
-            class="h-full w-full rounded-[calc(var(--radius)-0.2rem)] border border-border/60 bg-black outline-none"
+            title={`Browser desktop for ${sandbox.metadata?.repoName ?? sandbox.sandboxID}`}
+            class="h-full w-full rounded-[calc(var(--radius)-0.2rem)] border border-border/60 bg-background outline-none"
             bind:this={browserFrame}
             tabindex="-1"
             src={browserUrl}
@@ -489,11 +497,19 @@
               browserError = "";
               browserFrame?.focus();
             }}
-            onerror={() => {
-              browserState = "error";
-              browserError = "Browser session failed to load";
-            }}
           ></iframe>
+        </div>
+      {:else}
+        <div class="flex flex-1 items-center justify-center p-6">
+          <div class="w-full max-w-lg rounded-[calc(var(--radius)+0.25rem)] border border-border/60 bg-field/30 p-6 text-center">
+            <p class="text-sm text-foreground/70">
+              Open Browser to start the full sandbox desktop. Chrome will launch inside it.
+            </p>
+            <Button size="sm" class="mt-4" onclick={showBrowser} disabled={actionPending}>
+              <Globe class="size-3.5" />
+              Open Browser
+            </Button>
+          </div>
         </div>
       {/if}
     </div>

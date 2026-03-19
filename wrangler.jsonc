@@ -40,8 +40,9 @@
 		}
 	],
 	"vars": {
-		"E2B_BROWSER_PORT": "6080",
 		"E2B_DOMAIN": "e2b.app",
+		"E2B_DESKTOP_PORT": "6901",
+		"E2B_DESKTOP_WEB_PORT": "6902",
 		"E2B_TEMPLATE": "devbox-dev",
 		"E2B_TERMINAL_PORT": "7681",
 		"E2B_SANDBOX_TIMEOUT_MS": "3600000"

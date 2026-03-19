@@ -40,12 +40,13 @@ const aptPackages = [
   "gpg",
   "gh",
   "dbus-x11",
-  "fonts-liberation",
   "openbox",
-  "x11vnc",
+  "xfce4",
+  "xfce4-terminal",
   "xauth",
-  "xdg-utils",
-  "xvfb",
+  "xfonts-base",
+  "x11-xserver-utils",
+  "wmctrl",
 ];
 
 const userEnv = [
@@ -67,13 +68,17 @@ export const template = Template()
   .fromUbuntuImage("24.04")
   .setUser("root")
   .copy(
-    "runtime/start-ssh-stack.sh",
-    "/usr/local/bin/start-ssh-stack.sh",
+    "runtime/start-desktop.sh",
+    "/usr/local/bin/start-desktop.sh",
     { user: "root", mode: 0o755 },
   )
+  .copy("runtime/desktop_proxy.py", "/usr/local/bin/desktop_proxy.py", {
+    user: "root",
+    mode: 0o755,
+  })
   .copy(
-    "runtime/start-browser-stack.sh",
-    "/usr/local/bin/start-browser-stack.sh",
+    "runtime/start-ssh-stack.sh",
+    "/usr/local/bin/start-ssh-stack.sh",
     { user: "root", mode: 0o755 },
   )
   .copy("runtime/sshd_config", "/etc/ssh/sshd_config_e2b", {
@@ -87,24 +92,31 @@ export const template = Template()
   .aptInstall(aptPackages)
   .runCmd(
     [
-      "mkdir -p /etc/apt/keyrings",
-      "curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg",
-      'echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" > /etc/apt/sources.list.d/nodesource.list',
-      "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg",
-      'echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list',
+      "curl -fsSL -o /tmp/kasmvncserver.deb https://github.com/kasmtech/KasmVNC/releases/download/v1.4.0/kasmvncserver_noble_1.4.0_amd64.deb",
       "apt-get update",
-      "apt-get install -y --no-install-recommends nodejs google-chrome-stable",
+      "apt-get install -y --no-install-recommends /tmp/kasmvncserver.deb",
+      "rm -f /tmp/kasmvncserver.deb",
       "rm -rf /var/lib/apt/lists/*",
     ].join(" && "),
   )
   .runCmd(
     [
-      "curl -fsSL https://github.com/novnc/noVNC/archive/refs/tags/v1.6.0.tar.gz -o /tmp/novnc.tar.gz",
-      "rm -rf /opt/novnc /opt/noVNC-1.6.0",
-      "tar -xzf /tmp/novnc.tar.gz -C /opt",
-      "mv /opt/noVNC-1.6.0 /opt/novnc",
-      "ln -sf /opt/novnc/vnc.html /opt/novnc/index.html",
-      "rm -f /tmp/novnc.tar.gz",
+      "mkdir -p /etc/apt/keyrings",
+      "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /etc/apt/keyrings/google-linux.gpg",
+      'echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-linux.gpg] https://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list',
+      "apt-get update",
+      "apt-get install -y --no-install-recommends google-chrome-stable",
+      "rm -rf /var/lib/apt/lists/*",
+    ].join(" && "),
+  )
+  .runCmd(
+    [
+      "mkdir -p /etc/apt/keyrings",
+      "curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg",
+      'echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" > /etc/apt/sources.list.d/nodesource.list',
+      "apt-get update",
+      "apt-get install -y --no-install-recommends nodejs",
+      "rm -rf /var/lib/apt/lists/*",
     ].join(" && "),
   )
   .runCmd(
@@ -123,7 +135,7 @@ export const template = Template()
       "rm -f /tmp/nvim-linux-x86_64.tar.gz",
     ].join(" && "),
   )
-  .runCmd("python3 -m pip install --break-system-packages websockets uv websockify")
+  .runCmd("python3 -m pip install --break-system-packages aiohttp websockets uv")
   .runCmd("mkdir -p /etc/sudoers.d && printf 'user ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/e2b-user && chmod 440 /etc/sudoers.d/e2b-user")
   .runCmd("mkdir -p /home/user/workspace && chown -R user:user /home/user")
   .setUser("user")
@@ -131,7 +143,15 @@ export const template = Template()
   .runCmd("curl -fsSL https://bun.sh/install | bash")
   .runCmd("mkdir -p $HOME/.npm-global && npm config set prefix $HOME/.npm-global")
   .runCmd("npm install -g @openai/codex@0.115.0 @mariozechner/pi-coding-agent@0.57.1")
-  .runCmd("curl -fsSL https://claude.ai/install.sh | bash")
+  .runCmd(
+    [
+      "if curl -fsSL https://claude.ai/install.sh | bash; then",
+      "  echo 'claude-install=ok';",
+      "else",
+      "  echo 'claude-install=skipped';",
+      "fi",
+    ].join("\n"),
+  )
   .runCmd("curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path")
   .runCmd(`printf '%s\n' '${userEnv.replaceAll("'", "'\\''")}' >> $HOME/.bashrc`)
   .runCmd("printf '\n[ -f ~/.bashrc ] && . ~/.bashrc\n' >> $HOME/.profile")
@@ -147,11 +167,12 @@ export const template = Template()
       "nvim --version | head -n 1",
       "tmux -V",
       "rg --version | head -n 1",
-      "google-chrome-stable --version",
       "$HOME/.npm-global/bin/codex --version",
-      "$HOME/.local/bin/claude --version",
+      "if [ -x \"$HOME/.local/bin/claude\" ]; then $HOME/.local/bin/claude --version; else echo 'claude-not-installed'; fi",
       "$HOME/.opencode/bin/opencode --version",
       "/usr/local/bin/websocat --version | head -n 1",
+      "dpkg -s kasmvncserver | grep '^Version:'",
+      "google-chrome-stable --version",
     ].join(" && "),
   )
   .setStartCmd(

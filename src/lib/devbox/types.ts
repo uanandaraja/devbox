@@ -47,7 +47,7 @@ export type SandboxDetail = {
   templateID: string;
 };
 
-export type BrowserSession = {
+export type DesktopSession = {
   sandboxId: string;
   status: "idle" | "starting" | "open" | "error";
   url?: string;

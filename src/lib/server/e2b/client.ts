@@ -1,14 +1,19 @@
+import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { Sandbox } from "e2b";
 import type {
+  DesktopSession,
   ListedSandbox,
   SandboxDetail,
   Workspace,
 } from "$lib/devbox/types";
 import type { PlatformEnv, WorkspaceLaunchEnv } from "$lib/server/env";
 
+const defaultDesktopPort = 6901;
+const defaultDesktopWebPort = 6902;
 const defaultDomain = "e2b.app";
-const defaultBrowserPort = 6080;
 const defaultTerminalPort = 7681;
+const desktopUsername = "devbox";
 
 function getDomain(env: PlatformEnv) {
   return env.E2B_DOMAIN || defaultDomain;
@@ -26,12 +31,16 @@ function getDefaultTimeoutMs(env: PlatformEnv) {
   return Number(env.E2B_SANDBOX_TIMEOUT_MS ?? 3600000);
 }
 
-function getTerminalPort(env: PlatformEnv) {
-  return Number(env.E2B_TERMINAL_PORT ?? defaultTerminalPort);
+function getDesktopPort(env: PlatformEnv) {
+  return Number(env.E2B_DESKTOP_PORT ?? defaultDesktopPort);
 }
 
-function getBrowserPort(env: PlatformEnv) {
-  return Number(env.E2B_BROWSER_PORT ?? defaultBrowserPort);
+function getDesktopWebPort(env: PlatformEnv) {
+  return Number(env.E2B_DESKTOP_WEB_PORT ?? defaultDesktopWebPort);
+}
+
+function getTerminalPort(env: PlatformEnv) {
+  return Number(env.E2B_TERMINAL_PORT ?? defaultTerminalPort);
 }
 
 async function e2bFetch<T>(env: PlatformEnv, path: string, init?: RequestInit): Promise<T> {
@@ -82,12 +91,29 @@ function getSandboxHost(
   return `${port}-${sandbox.sandboxID}.${domain}`;
 }
 
+function getSandboxPortHttpUrl(
+  env: PlatformEnv,
+  sandbox: Pick<SandboxDetail, "domain" | "sandboxID">,
+  port: number,
+  path: string,
+) {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `https://${getSandboxHost(env, sandbox, port)}${normalizedPath}`;
+}
+
 function getWorkspaceDir(workspace: Pick<Workspace, "repo">) {
   return `/home/user/workspace/${workspace.repo}`;
 }
 
 function shellEscape(value: string) {
   return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+function getDesktopPassword(env: PlatformEnv, sandboxId: string) {
+  return createHash("sha256")
+    .update(`${env.E2B_API_KEY}:${sandboxId}:desktop`)
+    .digest("hex")
+    .slice(0, 32);
 }
 
 async function provisionWorkspaceSandbox(
@@ -161,7 +187,8 @@ export async function createSandbox(env: WorkspaceLaunchEnv, workspace: Workspac
         repoFullName: `${workspace.owner}/${workspace.repo}`,
       },
       envVars: {
-        E2B_BROWSER_PORT: String(getBrowserPort(env)),
+        E2B_DESKTOP_PORT: String(getDesktopPort(env)),
+        E2B_DESKTOP_WEB_PORT: String(getDesktopWebPort(env)),
         E2B_TERMINAL_PORT: String(getTerminalPort(env)),
       },
     }),
@@ -207,27 +234,6 @@ export async function killSandbox(env: PlatformEnv, sandboxId: string) {
   });
 }
 
-export async function ensureBrowserSession(
-  env: PlatformEnv,
-  sandboxId: string,
-  targetUrl?: string,
-) {
-  const sandbox = await Sandbox.connect(sandboxId, {
-    apiKey: env.E2B_API_KEY,
-    domain: env.E2B_DOMAIN,
-    timeoutMs: getDefaultTimeoutMs(env),
-  });
-
-  const command = targetUrl
-    ? `DEVBOX_BROWSER_START_URL=${shellEscape(targetUrl)} /usr/local/bin/start-browser-stack.sh`
-    : "/usr/local/bin/start-browser-stack.sh";
-
-  await sandbox.commands.run(command, {
-    user: "root",
-    timeoutMs: 120000,
-  });
-}
-
 export function getSandboxTerminalUrl(
   env: PlatformEnv,
   sandbox: Pick<SandboxDetail, "domain" | "sandboxID">,
@@ -235,13 +241,68 @@ export function getSandboxTerminalUrl(
   return `wss://${getSandboxHost(env, sandbox, getTerminalPort(env))}`;
 }
 
-export function getSandboxBrowserUrl(
+export function getSandboxDesktopUpstreamUrl(
+  env: PlatformEnv,
+  sandbox: Pick<SandboxDetail, "domain" | "sandboxID">,
+  path = "/",
+) {
+  const desktopUrl = new URL(
+    getSandboxPortHttpUrl(env, sandbox, getDesktopWebPort(env), path),
+  );
+
+  // Fit the desktop inside the app iframe and hide Kasm's left control handle.
+  desktopUrl.searchParams.set("autoconnect", "1");
+  desktopUrl.searchParams.set("resize", "scale");
+  desktopUrl.searchParams.set("show_control_bar", "0");
+
+  return desktopUrl.toString();
+}
+
+export function getSandboxDesktopProxyUrl(sandboxId: string, path = "/") {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `/api/desktop/${sandboxId}/proxy${normalizedPath}`;
+}
+
+export function getSandboxDesktopAuthHeader(env: PlatformEnv, sandboxId: string) {
+  const credentials = `${desktopUsername}:${getDesktopPassword(env, sandboxId)}`;
+  return `Basic ${Buffer.from(credentials).toString("base64")}`;
+}
+
+async function ensureSandboxDesktop(
   env: PlatformEnv,
   sandbox: Pick<SandboxDetail, "domain" | "sandboxID">,
 ) {
-  const host = getSandboxHost(env, sandbox, getBrowserPort(env));
-  const url = new URL(`https://${host}/vnc_lite.html`);
-  url.searchParams.set("path", "websockify");
-  url.searchParams.set("scale", "true");
-  return url.toString();
+  const connection = await Sandbox.connect(sandbox.sandboxID, {
+    apiKey: env.E2B_API_KEY,
+    domain: env.E2B_DOMAIN,
+    timeoutMs: getDefaultTimeoutMs(env),
+  });
+
+  await connection.commands.run("/usr/local/bin/start-desktop.sh", {
+    user: "root",
+    envs: {
+      E2B_DESKTOP_PASSWORD: getDesktopPassword(env, sandbox.sandboxID),
+      E2B_DESKTOP_PORT: String(getDesktopPort(env)),
+      E2B_DESKTOP_WEB_PORT: String(getDesktopWebPort(env)),
+      E2B_DESKTOP_USER: desktopUsername,
+    },
+    timeoutMs: 90000,
+  });
+}
+
+export async function getSandboxDesktopSession(
+  env: PlatformEnv,
+  sandbox: Pick<SandboxDetail, "domain" | "sandboxID" | "state">,
+): Promise<DesktopSession> {
+  if (sandbox.state !== "running") {
+    throw new Error("Sandbox is not running");
+  }
+
+  await ensureSandboxDesktop(env, sandbox);
+
+  return {
+    sandboxId: sandbox.sandboxID,
+    status: "open",
+    url: getSandboxDesktopUpstreamUrl(env, sandbox, "/"),
+  };
 }

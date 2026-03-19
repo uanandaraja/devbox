@@ -13,6 +13,15 @@ E2B_API_KEY=
 GITHUB_TOKEN=
 ```
 
+desktop defaults:
+
+```bash
+E2B_DESKTOP_PORT=6901
+E2B_DESKTOP_WEB_PORT=6902
+E2B_TEMPLATE_CPU_COUNT=4
+E2B_TEMPLATE_MEMORY_MB=8192
+```
+
 install:
 
 ```bash
@@ -51,4 +60,12 @@ bun run build:template:dev
 bun run sandbox:create
 bun run sandbox:list
 bun run sandbox:ssh <sandbox-id>
+```
+
+browser tab:
+
+```bash
+browser opens a full remote desktop session
+chrome starts inside that desktop
+native chrome devtools run there
 ```

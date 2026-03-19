@@ -2,7 +2,7 @@
 set -euo pipefail
 
 mkdir -p /run/sshd /var/log/e2b /home/user/.ssh /home/user/.cache/devbox
-rm -f /tmp/e2b-ssh-ready /tmp/e2b-terminal-ready /tmp/e2b-browser-ready /tmp/e2b-ready
+rm -f /tmp/e2b-ssh-ready /tmp/e2b-terminal-ready /tmp/e2b-ready
 chmod 700 /home/user/.ssh
 chown -R user:user /home/user/.ssh /home/user/.cache/devbox
 
