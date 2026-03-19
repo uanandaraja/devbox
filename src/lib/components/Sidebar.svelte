@@ -1,8 +1,9 @@
 <script lang="ts">
   import { page } from "$app/state";
-  import { goto } from "$app/navigation";
+  import { goto, invalidateAll } from "$app/navigation";
   import type { Workspace, ListedSandbox } from "$lib/devbox/types";
-  import { CaretDown, CaretRight, Plus, Terminal } from "phosphor-svelte";
+  import { resumeSandboxCommand } from "$lib/remote/devbox.remote";
+  import { CaretDown, CaretRight, Play, Plus, Terminal } from "phosphor-svelte";
 
   let {
     workspaces,
@@ -23,6 +24,8 @@
   } = $props();
 
   let collapsedWorkspaces = $state<Set<string>>(new Set());
+  let resumePendingSandboxId = $state<string | null>(null);
+  let actionError = $state("");
   const expandedWorkspaces = $derived.by(() => {
     const next = new Set<string>();
 
@@ -60,7 +63,7 @@
     collapsedWorkspaces = next;
   }
 
-  function selectSandbox(sandboxId: string) {
+  async function selectSandbox(sandboxId: string) {
     const params = new URLSearchParams(page.url.searchParams);
 
     if (!openSandboxIds.includes(sandboxId)) {
@@ -68,8 +71,27 @@
     }
 
     params.set("active", sandboxId);
-    goto(`/?${params.toString()}`, { replaceState: false });
+    await goto(`/?${params.toString()}`, { replaceState: false });
     onClose?.();
+  }
+
+  async function handleResumeSandbox(event: MouseEvent, sandboxId: string) {
+    event.stopPropagation();
+
+    resumePendingSandboxId = sandboxId;
+    actionError = "";
+
+    try {
+      await resumeSandboxCommand({ sandboxId });
+      await invalidateAll();
+      await selectSandbox(sandboxId);
+    } catch (err) {
+      actionError = err instanceof Error ? err.message : "Failed to resume sandbox";
+    } finally {
+      if (resumePendingSandboxId === sandboxId) {
+        resumePendingSandboxId = null;
+      }
+    }
   }
 </script>
 
@@ -100,6 +122,12 @@
         <Plus class="size-3" />
       </button>
     </div>
+
+    {#if actionError}
+      <div class="mx-3 mb-3 rounded-md border border-destructive/20 bg-destructive/10 px-2.5 py-2 text-[11px] text-destructive">
+        {actionError}
+      </div>
+    {/if}
 
     {#if workspaces.length === 0}
       <div class="px-3 py-3 text-sm text-foreground/30">No workspaces yet.</div>
@@ -148,22 +176,37 @@
             <!-- Sandbox list -->
             {#each wSandboxes as sandbox (sandbox.sandboxID)}
               {@const isSelected = selectedSandboxId === sandbox.sandboxID}
-              <button
-                onclick={() => selectSandbox(sandbox.sandboxID)}
-                class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors {isSelected
-                  ? 'bg-surface-selected text-foreground'
-                  : 'text-foreground/45 hover:bg-field/80 hover:text-foreground/70'}"
-              >
-                <div
-                  class="size-1.5 flex-shrink-0 rounded-full {sandbox.state === 'running'
-                    ? 'bg-status-running'
-                    : 'bg-status-paused'}"
-                ></div>
-                <span class="flex-1 truncate font-mono text-[11px]">
-                  {sandbox.metadata?.repoOwner ?? "?"}/{sandbox.metadata?.repoName ??
-                    sandbox.sandboxID.slice(0, 8)}
-                </span>
-              </button>
+              <div class="flex items-center gap-1">
+                <button
+                  onclick={() => selectSandbox(sandbox.sandboxID)}
+                  class="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors {isSelected
+                    ? 'bg-surface-selected text-foreground'
+                    : 'text-foreground/45 hover:bg-field/80 hover:text-foreground/70'}"
+                >
+                  <div
+                    class="size-1.5 flex-shrink-0 rounded-full {sandbox.state === 'running'
+                      ? 'bg-status-running'
+                      : 'bg-status-paused'}"
+                  ></div>
+                  <span class="flex-1 truncate font-mono text-[11px]">
+                    {sandbox.metadata?.repoOwner ?? "?"}/{sandbox.metadata?.repoName ??
+                      sandbox.sandboxID.slice(0, 8)}
+                  </span>
+                </button>
+
+                {#if sandbox.state === "paused"}
+                  <button
+                    type="button"
+                    class="flex size-6 flex-shrink-0 items-center justify-center rounded-md text-foreground/35 transition-colors hover:bg-field hover:text-foreground/65 disabled:cursor-not-allowed disabled:opacity-50"
+                    onclick={(event) => handleResumeSandbox(event, sandbox.sandboxID)}
+                    disabled={resumePendingSandboxId !== null}
+                    title="Resume sandbox"
+                    aria-label={`Resume ${sandbox.sandboxID}`}
+                  >
+                    <Play class="size-3" weight="fill" />
+                  </button>
+                {/if}
+              </div>
             {/each}
 
             {#if wSandboxes.length === 0}

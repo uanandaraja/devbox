@@ -65,10 +65,44 @@ async function e2bFetch<T>(env: PlatformEnv, path: string, init?: RequestInit): 
   return response.json() as Promise<T>;
 }
 
-export async function listSandboxes(env: PlatformEnv) {
-  const sandboxes = await e2bFetch<ListedSandbox[]>(env, "/sandboxes", {
+async function listSandboxesPage(env: PlatformEnv, nextToken?: string) {
+  const params = new URLSearchParams();
+  params.append("state", "running");
+  params.append("state", "paused");
+  params.set("limit", "100");
+
+  if (nextToken) {
+    params.set("nextToken", nextToken);
+  }
+
+  const response = await fetch(`${getApiBaseUrl(env)}/v2/sandboxes?${params.toString()}`, {
     method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-KEY": env.E2B_API_KEY,
+    },
   });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`E2B ${response.status}: ${message || response.statusText}`);
+  }
+
+  return {
+    sandboxes: (await response.json()) as ListedSandbox[],
+    nextToken: response.headers.get("x-next-token") ?? undefined,
+  };
+}
+
+export async function listSandboxes(env: PlatformEnv) {
+  const sandboxes: ListedSandbox[] = [];
+  let nextToken: string | undefined;
+
+  do {
+    const page = await listSandboxesPage(env, nextToken);
+    sandboxes.push(...page.sandboxes);
+    nextToken = page.nextToken;
+  } while (nextToken);
 
   return sandboxes.sort(
     (left, right) =>
