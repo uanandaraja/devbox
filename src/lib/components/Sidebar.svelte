@@ -7,15 +7,19 @@
   let {
     workspaces,
     sandboxes,
+    open = false,
     onAddWorkspace,
     onEditWorkspace,
     onLaunchWorkspace,
+    onClose,
   }: {
     workspaces: Workspace[];
     sandboxes: ListedSandbox[];
+    open?: boolean;
     onAddWorkspace: () => void;
     onEditWorkspace: (workspace: Workspace) => void;
     onLaunchWorkspace: (workspace: Workspace) => void;
+    onClose?: () => void;
   } = $props();
 
   let collapsedWorkspaces = $state<Set<string>>(new Set());
@@ -55,10 +59,15 @@
 
   function selectSandbox(sandboxId: string) {
     goto(`/?sandbox=${sandboxId}`, { replaceState: false });
+    onClose?.();
   }
 </script>
 
-<aside class="flex w-64 flex-shrink-0 flex-col border-r border-sidebar-divider bg-sidebar">
+<aside
+  class="fixed inset-y-0 left-0 z-40 flex w-64 flex-shrink-0 flex-col border-r border-sidebar-divider bg-sidebar transition-transform duration-200
+    md:relative md:inset-auto md:z-auto md:translate-x-0
+    {open ? 'translate-x-0' : '-translate-x-full'}"
+>
   <!-- Logo -->
   <div class="flex h-11 items-center border-b border-sidebar-divider px-4">
     <div class="flex items-center gap-2">
