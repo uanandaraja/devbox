@@ -2,7 +2,6 @@ node_modules
 .svelte-kit
 .wrangler
 .DS_Store
-worker-configuration.d.ts
 worker.js
 .env
 __pycache__/
