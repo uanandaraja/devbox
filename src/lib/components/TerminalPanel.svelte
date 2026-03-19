@@ -1,10 +1,6 @@
 <script lang="ts">
-  import { onMount, tick } from "svelte";
+  import { tick } from "svelte";
   import { invalidateAll } from "$app/navigation";
-  import type {
-    FitAddon as GhosttyFitAddon,
-    Terminal as GhosttyTerminal,
-  } from "ghostty-web";
   import type { DesktopSession, ListedSandbox } from "$lib/werkbench/types";
   import {
     killSandboxCommand,
@@ -12,12 +8,15 @@
     resumeSandboxCommand,
   } from "$lib/remote/werkbench.remote";
   import { Button } from "$lib/components/ui/button/index.js";
+  import TerminalPane from "$lib/components/TerminalPane.svelte";
   import {
     ArrowCounterClockwise,
     ArrowSquareOut,
     Globe,
     Pause,
     Play,
+    SplitHorizontal,
+    SplitVertical,
     Terminal,
     Trash,
     WarningCircle,
@@ -33,80 +32,27 @@
     onKilled?: () => void;
   } = $props();
 
-  let terminalElement = $state<HTMLDivElement | null>(null);
-  let terminalState = $state<"idle" | "connecting" | "open" | "closed" | "error">("idle");
-  let terminalError = $state("");
   let panelMode = $state<"terminal" | "browser">("terminal");
   let browserState = $state<DesktopSession["status"]>("idle");
   let browserError = $state("");
   let browserUrl = $state("");
   let actionPending = $state(false);
   let actionError = $state("");
-
-  let xterm: GhosttyTerminal | null = null;
-  let fitAddon: GhosttyFitAddon | null = null;
   let browserFrame = $state<HTMLIFrameElement | null>(null);
-  let socket: WebSocket | null = null;
-  let resizeObserver: ResizeObserver | null = null;
-  let ghosttyReady = false;
-  let focusRun = 0;
-
-  function cssVar(name: string, fallback: string) {
-    if (typeof document === "undefined") return fallback;
-    return (
-      getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
-    );
-  }
-
-  function cleanupSocket() {
-    resizeObserver?.disconnect();
-    resizeObserver = null;
-    if (socket) {
-      socket.onopen = null;
-      socket.onclose = null;
-      socket.onerror = null;
-      socket.onmessage = null;
-      socket.close();
-      socket = null;
-    }
-  }
+  let splitContainer = $state<HTMLDivElement | null>(null);
+  let splitRatio = $state(0.5);
+  let splitLayout = $state<"columns" | "rows">("columns");
+  let activePaneId = $state("terminal-1");
+  let paneIds = $state(["terminal-1"]);
+  let resizeDrag = $state<{
+    pointerId: number;
+    startRatio: number;
+  } | null>(null);
 
   function resetBrowserState() {
     browserState = "idle";
     browserError = "";
     browserUrl = "";
-  }
-
-  function sendResize() {
-    if (!socket || socket.readyState !== WebSocket.OPEN || !xterm) return;
-    socket.send(JSON.stringify({ type: "resize", cols: xterm.cols, rows: xterm.rows }));
-  }
-
-  async function syncActiveTerminal() {
-    if (!active || panelMode !== "terminal" || !xterm) return;
-
-    const currentRun = ++focusRun;
-    await tick();
-
-    if (currentRun !== focusRun || !active || !xterm) return;
-
-    requestAnimationFrame(() => {
-      if (currentRun !== focusRun || !active || !xterm) return;
-
-      fitAddon?.fit();
-      sendResize();
-      terminalElement?.focus();
-      xterm.textarea?.focus();
-      xterm.focus();
-
-      requestAnimationFrame(() => {
-        if (currentRun !== focusRun || !active || !xterm) return;
-
-        xterm.textarea?.focus();
-        xterm.focus();
-        sendResize();
-      });
-    });
   }
 
   async function syncActiveBrowser() {
@@ -115,51 +61,6 @@
     requestAnimationFrame(() => {
       browserFrame?.focus();
     });
-  }
-
-  async function openTerminal() {
-    if (!xterm || sandbox.state !== "running") return;
-    cleanupSocket();
-    xterm.reset();
-    xterm.clear();
-    terminalState = "connecting";
-    terminalError = "";
-
-    const sessionId = crypto.randomUUID();
-    const protocol = location.protocol === "https:" ? "wss" : "ws";
-    const url = new URL(`${protocol}://${location.host}/api/terminal/${sandbox.sandboxID}`);
-    url.searchParams.set("session", sessionId);
-
-    socket = new WebSocket(url);
-    socket.binaryType = "arraybuffer";
-
-    socket.onopen = () => {
-      if (!xterm) return;
-      terminalState = "open";
-      void syncActiveTerminal();
-      resizeObserver = new ResizeObserver(() => {
-        fitAddon?.fit();
-        sendResize();
-      });
-      if (terminalElement) resizeObserver.observe(terminalElement);
-    };
-
-    socket.onmessage = (event) => {
-      if (typeof event.data === "string") {
-        xterm?.write(event.data);
-      } else {
-        xterm?.write(new Uint8Array(event.data));
-      }
-    };
-
-    socket.onerror = () => {
-      terminalState = "error";
-      terminalError = "Terminal connection failed";
-    };
-
-    socket.onclose = () => {
-      if (terminalState !== "error") terminalState = "closed";
-    };
   }
 
   async function loadBrowser() {
@@ -198,7 +99,6 @@
 
   async function showTerminal() {
     panelMode = "terminal";
-    await syncActiveTerminal();
   }
 
   async function showBrowser() {
@@ -221,8 +121,6 @@
       if (panelMode === "browser") {
         await loadBrowser();
         await syncActiveBrowser();
-      } else {
-        await openTerminal();
       }
     } catch (err) {
       actionError = err instanceof Error ? err.message : "Failed to resume";
@@ -235,10 +133,8 @@
     actionPending = true;
     actionError = "";
     try {
-      cleanupSocket();
       await pauseSandboxCommand({ sandboxId: sandbox.sandboxID });
       await invalidateAll();
-      terminalState = "idle";
       resetBrowserState();
     } catch (err) {
       actionError = err instanceof Error ? err.message : "Failed to pause";
@@ -251,7 +147,6 @@
     actionPending = true;
     actionError = "";
     try {
-      cleanupSocket();
       await killSandboxCommand({ sandboxId: sandbox.sandboxID });
       await invalidateAll();
       resetBrowserState();
@@ -263,76 +158,79 @@
     }
   }
 
-  onMount(() => {
-    if (!terminalElement) return;
+  function addSplitPane() {
+    if (paneIds.length > 1) return;
 
-    let disposed = false;
+    const nextId = `terminal-${paneIds.length + 1}`;
+    paneIds = [...paneIds, nextId];
+    activePaneId = nextId;
+    splitRatio = 0.5;
+  }
 
-    void (async () => {
-      const { Terminal, FitAddon, init } = await import("ghostty-web");
+  function closeSplitPane() {
+    if (paneIds.length === 1) return;
 
-      await init();
-      if (disposed || !terminalElement) return;
+    const [firstPaneId] = paneIds;
+    paneIds = [firstPaneId];
+    activePaneId = firstPaneId;
+    splitRatio = 0.5;
+  }
 
-      ghosttyReady = true;
-      xterm = new Terminal({
-        convertEol: true,
-        cursorBlink: true,
-        fontFamily: cssVar("--font-mono", "ui-monospace, monospace"),
-        fontSize: 13,
-        theme: {
-          background: cssVar("--terminal-background", "#0b0f14"),
-          foreground: cssVar("--terminal-foreground", "#edf4ff"),
-          cursor: cssVar("--terminal-cursor", "#9ca3af"),
-          selectionBackground: cssVar("--terminal-selection", "rgba(103, 200, 255, 0.22)"),
-        },
-      });
+  function setActivePane(paneId: string) {
+    activePaneId = paneId;
+  }
 
-      fitAddon = new FitAddon();
-      xterm.loadAddon(fitAddon);
-      xterm.open(terminalElement);
-      fitAddon.fit();
+  function toggleSplitLayout() {
+    splitLayout = splitLayout === "columns" ? "rows" : "columns";
+    splitRatio = 0.5;
+  }
 
-      xterm.onData((input) => {
-        if (socket?.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ type: "input", data: input }));
-        }
-      });
+  function beginSplitResize(event: PointerEvent) {
+    if (paneIds.length < 2) return;
 
-      if (sandbox.state === "running") {
-        await openTerminal();
-      }
-    })().catch((error) => {
-      terminalState = "error";
-      terminalError = error instanceof Error ? error.message : "Failed to initialize terminal";
-    });
-
-    return () => {
-      disposed = true;
-      cleanupSocket();
-      xterm?.dispose();
-      xterm = null;
-      fitAddon = null;
-      ghosttyReady = false;
+    event.preventDefault();
+    resizeDrag = {
+      pointerId: event.pointerId,
+      startRatio: splitRatio,
     };
-  });
-
-  $effect(() => {
-    if (ghosttyReady && sandbox.state === "running" && terminalState === "idle" && xterm) {
-      void openTerminal();
-    }
-  });
-
-  $effect(() => {
-    if (ghosttyReady && active && panelMode === "terminal" && xterm) {
-      void syncActiveTerminal();
-    }
-  });
+  }
 
   $effect(() => {
     if (active && panelMode === "browser" && browserUrl) {
       void syncActiveBrowser();
     }
+  });
+
+  $effect(() => {
+    if (!resizeDrag || !splitContainer) return;
+
+    const dragPointerId = resizeDrag.pointerId;
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!splitContainer) return;
+
+      const rect = splitContainer.getBoundingClientRect();
+      if (splitLayout === "columns" && rect.width > 0) {
+        const nextRatio = (event.clientX - rect.left) / rect.width;
+        splitRatio = Math.min(0.75, Math.max(0.25, nextRatio));
+      } else if (splitLayout === "rows" && rect.height > 0) {
+        const nextRatio = (event.clientY - rect.top) / rect.height;
+        splitRatio = Math.min(0.75, Math.max(0.25, nextRatio));
+      }
+    };
+
+    const handlePointerUp = (event: PointerEvent) => {
+      if (event.pointerId === dragPointerId) {
+        resizeDrag = null;
+      }
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
   });
 </script>
 
@@ -371,14 +269,14 @@
         {:else if browserState === "error"}
           <span class="text-sm text-destructive/70">desktop error</span>
         {/if}
-      {:else if terminalState === "connecting"}
-        <span class="text-sm text-foreground/30">connecting...</span>
-      {:else if terminalState === "open"}
-        <span class="text-sm text-foreground/30">connected</span>
-      {:else if terminalState === "closed"}
-        <span class="text-sm text-foreground/30">disconnected</span>
-      {:else if terminalState === "error"}
-        <span class="text-sm text-destructive/70">error</span>
+      {:else}
+        <span class="text-sm text-foreground/30">
+          {paneIds.length === 1
+            ? "single terminal"
+            : splitLayout === "columns"
+              ? "split side by side"
+              : "split stacked"}
+        </span>
       {/if}
     </div>
 
@@ -406,12 +304,31 @@
         <Button
           size="xs"
           variant="ghost"
-          onclick={() => openTerminal()}
+          onclick={paneIds.length === 1 ? addSplitPane : closeSplitPane}
           disabled={sandbox.state !== "running" || actionPending}
-          title="Reconnect"
+          title={paneIds.length === 1 ? "Open split terminal" : "Close split terminal"}
         >
-          <ArrowCounterClockwise class="size-3.5" />
+          {#if paneIds.length === 1}
+            <SplitHorizontal class="size-3.5" />
+          {:else}
+            <SplitVertical class="size-3.5" />
+          {/if}
         </Button>
+        {#if paneIds.length > 1}
+          <Button
+            size="xs"
+            variant="ghost"
+            onclick={toggleSplitLayout}
+            disabled={sandbox.state !== "running" || actionPending}
+            title={splitLayout === "columns" ? "Stack panes" : "Show panes side by side"}
+          >
+            {#if splitLayout === "columns"}
+              <SplitVertical class="size-3.5" />
+            {:else}
+              <SplitHorizontal class="size-3.5" />
+            {/if}
+          </Button>
+        {/if}
       {/if}
       {#if sandbox.state === "paused"}
         <Button size="xs" variant="ghost" onclick={handleResume} disabled={actionPending}>
@@ -451,13 +368,6 @@
     </div>
   {/if}
 
-  {#if terminalError && panelMode === "terminal"}
-    <div class="flex items-center gap-2 border-b border-destructive/20 bg-destructive/10 px-4 py-2 text-sm text-destructive">
-      <WarningCircle class="size-3.5 flex-shrink-0" />
-      {terminalError}
-    </div>
-  {/if}
-
   {#if sandbox.state === "paused"}
     <div class="flex flex-1 items-center justify-center">
       <div class="text-center">
@@ -469,14 +379,57 @@
       </div>
     </div>
   {:else}
-    <div class:hidden={panelMode !== "terminal"} class="terminal-shell flex-1 overflow-hidden">
-      <div class="h-full p-1">
+    <div class:hidden={panelMode !== "terminal"} class="flex flex-1 overflow-hidden p-1">
+      {#if paneIds.length === 1}
+        <TerminalPane
+          sandbox={sandbox}
+          label="Terminal 1"
+          active={active && panelMode === "terminal"}
+          visible={panelMode === "terminal"}
+          onActivate={() => setActivePane("terminal-1")}
+        />
+      {:else}
         <div
-          class="h-full rounded-[calc(var(--radius)-0.2rem)] outline-none"
-          bind:this={terminalElement}
-          tabindex="-1"
-        ></div>
-      </div>
+          class="terminal-split-grid h-full w-full"
+          bind:this={splitContainer}
+          data-layout={splitLayout}
+          style:grid-template-columns={splitLayout === "columns"
+            ? `minmax(0, ${splitRatio}fr) 0.625rem minmax(0, ${1 - splitRatio}fr)`
+            : undefined}
+          style:grid-template-rows={splitLayout === "rows"
+            ? `minmax(0, ${splitRatio}fr) 0.625rem minmax(0, ${1 - splitRatio}fr)`
+            : undefined}
+        >
+          <div class="min-h-0 min-w-0">
+            <TerminalPane
+              sandbox={sandbox}
+              label="Terminal 1"
+              active={active && panelMode === "terminal" && activePaneId === "terminal-1"}
+              visible={panelMode === "terminal"}
+              onActivate={() => setActivePane("terminal-1")}
+            />
+          </div>
+
+          <button
+            class="terminal-split-handle"
+            data-layout={splitLayout}
+            aria-label="Resize split panes"
+            onpointerdown={beginSplitResize}
+          ></button>
+
+          <div class="min-h-0 min-w-0">
+            <TerminalPane
+              sandbox={sandbox}
+              label="Terminal 2"
+              active={active && panelMode === "terminal" && activePaneId === "terminal-2"}
+              visible={panelMode === "terminal"}
+              closeable={true}
+              onActivate={() => setActivePane("terminal-2")}
+              onClose={closeSplitPane}
+            />
+          </div>
+        </div>
+      {/if}
     </div>
 
     <div class:hidden={panelMode !== "browser"} class="flex flex-1 flex-col overflow-hidden">

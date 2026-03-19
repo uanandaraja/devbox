@@ -170,13 +170,81 @@
 
   .terminal-shell,
   .terminal-shell > div,
+  .terminal-host,
   .terminal-shell canvas {
     background-color: var(--terminal-background);
   }
 
+  .terminal-host {
+    position: relative;
+    overflow: hidden;
+  }
+
   .terminal-shell canvas {
     display: block;
-    inline-size: 100%;
-    block-size: 100%;
+    max-inline-size: none;
+    max-block-size: none;
+  }
+
+  .terminal-split-grid {
+    display: grid;
+    gap: 0;
+  }
+
+  .terminal-split-grid[data-layout="columns"] {
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .terminal-split-grid[data-layout="rows"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .terminal-split-handle {
+    position: relative;
+    z-index: 1;
+    border: 0;
+    background:
+      linear-gradient(
+        180deg,
+        transparent 0,
+        color-mix(in oklch, var(--border) 55%, transparent) 20%,
+        color-mix(in oklch, var(--border) 55%, transparent) 80%,
+        transparent 100%
+      );
+  }
+
+  .terminal-split-handle::after {
+    content: "";
+    position: absolute;
+    inset: 50%;
+    border-radius: 999px;
+    background: color-mix(in oklch, var(--foreground) 14%, transparent);
+    transform: translate(-50%, -50%);
+    transition:
+      background-color 120ms ease,
+      transform 120ms ease;
+  }
+
+  .terminal-split-handle:hover::after,
+  .terminal-split-handle:focus-visible::after {
+    background: color-mix(in oklch, var(--foreground) 28%, transparent);
+  }
+
+  .terminal-split-handle[data-layout="columns"] {
+    cursor: col-resize;
+  }
+
+  .terminal-split-handle[data-layout="columns"]::after {
+    inline-size: 0.2rem;
+    block-size: 3rem;
+  }
+
+  .terminal-split-handle[data-layout="rows"] {
+    cursor: row-resize;
+  }
+
+  .terminal-split-handle[data-layout="rows"]::after {
+    inline-size: 3rem;
+    block-size: 0.2rem;
   }
 }
