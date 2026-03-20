@@ -323,8 +323,8 @@
         fontSources: [
           {
             type: "url",
-            url: "https://cdn.jsdelivr.net/gh/JetBrains/JetBrainsMono@v2.304/fonts/ttf/JetBrainsMono-Regular.ttf",
-            label: "JetBrains Mono",
+            url: "https://raw.githubusercontent.com/ryanoasis/nerd-fonts/refs/heads/master/patched-fonts/JetBrainsMono/Ligatures/Regular/JetBrainsMonoNerdFontMono-Regular.ttf",
+            label: "JetBrains Mono Nerd Font Mono",
           },
         ],
         appOptions: {
