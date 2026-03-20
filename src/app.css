@@ -179,7 +179,7 @@
     position: relative;
     overflow: hidden;
     overscroll-behavior: contain;
-    touch-action: none;
+    touch-action: pan-y pinch-zoom;
   }
 
   .terminal-shell canvas {

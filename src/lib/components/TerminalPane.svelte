@@ -1,9 +1,5 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import type {
-    FitAddon as GhosttyFitAddon,
-    Terminal as GhosttyTerminal,
-  } from "ghostty-web";
   import type { ListedSandbox } from "$lib/werkbench/types";
   import { Button } from "$lib/components/ui/button/index.js";
   import { ArrowCounterClockwise, WarningCircle, X } from "phosphor-svelte";
@@ -26,19 +22,59 @@
     onClose?: () => void;
   } = $props();
 
+  type PtyCallbacks = {
+    onConnect?: () => void;
+    onDisconnect?: () => void;
+    onData?: (data: string) => void;
+    onStatus?: (shell: string) => void;
+    onError?: (message: string, errors?: string[]) => void;
+    onExit?: (code: number) => void;
+  };
+
+  type PtyResizeMeta = {
+    widthPx?: number;
+    heightPx?: number;
+    cellW?: number;
+    cellH?: number;
+  };
+
+  type PtyConnectOptions = {
+    url: string;
+    cols?: number;
+    rows?: number;
+    callbacks: PtyCallbacks;
+  };
+
+  type PtyTransport = {
+    connect: (options: PtyConnectOptions) => void | Promise<void>;
+    disconnect: () => void;
+    sendInput: (data: string) => boolean;
+    resize: (cols: number, rows: number, meta?: PtyResizeMeta) => boolean;
+    isConnected: () => boolean;
+    destroy?: () => void | Promise<void>;
+  };
+
+  type ResttyInstance = {
+    connectPty: (url?: string) => void;
+    disconnectPty: () => void;
+    isPtyConnected: () => boolean;
+    focus: () => void;
+    blur: () => void;
+    updateSize: (force?: boolean) => void;
+    destroy: () => void;
+    applyTheme: (theme: unknown, sourceLabel?: string) => void;
+    setFontSize: (value: number) => void;
+  };
+
   let terminalElement = $state<HTMLDivElement | null>(null);
   let terminalState = $state<"idle" | "connecting" | "open" | "closed" | "error">("idle");
   let terminalError = $state("");
 
-  let xterm: GhosttyTerminal | null = null;
-  let fitAddon: GhosttyFitAddon | null = null;
-  let socket: WebSocket | null = null;
+  let restty: ResttyInstance | null = null;
+  let ptyTransport: PtyTransport | null = null;
   let resizeObserver: ResizeObserver | null = null;
-  let ghosttyReady = false;
+  let resttyReady = false;
   let focusRun = 0;
-  let activeTouchId: number | null = null;
-  let lastTouchY = 0;
-  let touchLineRemainder = 0;
 
   function cssVar(name: string, fallback: string) {
     if (typeof document === "undefined") return fallback;
@@ -52,32 +88,14 @@
     resizeObserver = null;
   }
 
-  function cleanupSocket() {
+  function cleanupTerminalConnection() {
     cleanupResizeObserver();
-    if (socket) {
-      socket.onopen = null;
-      socket.onclose = null;
-      socket.onerror = null;
-      socket.onmessage = null;
-      socket.close();
-      socket = null;
-    }
-  }
-
-  function sendResize() {
-    if (!socket || socket.readyState !== WebSocket.OPEN || !xterm) return;
-    socket.send(JSON.stringify({ type: "resize", cols: xterm.cols, rows: xterm.rows }));
-  }
-
-  function sendInput(data: string) {
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    socket.send(JSON.stringify({ type: "input", data }));
+    ptyTransport?.disconnect();
   }
 
   function fitTerminal() {
-    if (!visible || !xterm) return;
-    fitAddon?.fit();
-    sendResize();
+    if (!visible || !restty) return;
+    restty.updateSize(true);
   }
 
   function observeTerminal() {
@@ -93,180 +111,192 @@
   }
 
   async function syncActiveTerminal() {
-    if (!active || !visible || !xterm) return;
+    if (!active || !visible || !restty) return;
 
     const currentRun = ++focusRun;
     await tick();
 
-    if (currentRun !== focusRun || !active || !visible || !xterm) return;
+    if (currentRun !== focusRun || !active || !visible || !restty) return;
 
     requestAnimationFrame(() => {
-      if (currentRun !== focusRun || !active || !visible || !xterm) return;
+      if (currentRun !== focusRun || !active || !visible || !restty) return;
 
       fitTerminal();
       terminalElement?.focus();
-      xterm.textarea?.focus();
-      xterm.focus();
+      restty.focus();
 
       requestAnimationFrame(() => {
-        if (currentRun !== focusRun || !active || !visible || !xterm) return;
+        if (currentRun !== focusRun || !active || !visible || !restty) return;
 
-        xterm.textarea?.focus();
-        xterm.focus();
-        sendResize();
+        restty.focus();
+        fitTerminal();
       });
     });
-  }
-
-  function writeToTerminal(data: string | Uint8Array) {
-    if (!xterm) return;
-
-    const previousViewportY = xterm.getViewportY();
-    const previousScrollbackLength = xterm.getScrollbackLength();
-
-    xterm.write(data, () => {
-      if (!xterm || previousViewportY <= 0 || xterm.getViewportY() !== 0) return;
-
-      const scrollbackDelta = Math.max(
-        0,
-        xterm.getScrollbackLength() - previousScrollbackLength,
-      );
-      const targetViewportY = Math.min(
-        xterm.getScrollbackLength(),
-        previousViewportY + scrollbackDelta,
-      );
-
-      xterm.scrollToLine(targetViewportY);
-    });
-  }
-
-  async function openTerminal() {
-    if (!xterm || sandbox.state !== "running") return;
-
-    cleanupSocket();
-    xterm.reset();
-    xterm.clear();
-    terminalState = "connecting";
-    terminalError = "";
-
-    const sessionId = crypto.randomUUID();
-    const protocol = location.protocol === "https:" ? "wss" : "ws";
-    const url = new URL(`${protocol}://${location.host}/api/terminal/${sandbox.sandboxID}`);
-    url.searchParams.set("session", sessionId);
-
-    socket = new WebSocket(url);
-    socket.binaryType = "arraybuffer";
-
-    socket.onopen = () => {
-      terminalState = "open";
-      observeTerminal();
-      if (visible) {
-        void syncActiveTerminal();
-      } else {
-        sendResize();
-      }
-    };
-
-    socket.onmessage = (event) => {
-      if (typeof event.data === "string") {
-        writeToTerminal(event.data);
-      } else {
-        writeToTerminal(new Uint8Array(event.data));
-      }
-    };
-
-    socket.onerror = () => {
-      terminalState = "error";
-      terminalError = "Terminal connection failed";
-    };
-
-    socket.onclose = () => {
-      cleanupResizeObserver();
-      if (terminalState !== "error") terminalState = "closed";
-    };
   }
 
   function activatePane() {
     onActivate?.();
   }
 
-  function getTrackedTouch(touches: TouchList) {
-    if (activeTouchId === null) return null;
+  function getTerminalUrl() {
+    const sessionId = crypto.randomUUID();
+    const protocol = location.protocol === "https:" ? "wss" : "ws";
+    const url = new URL(`${protocol}://${location.host}/api/terminal/${sandbox.sandboxID}`);
+    url.searchParams.set("session", sessionId);
+    return url.toString();
+  }
 
-    for (const touch of touches) {
-      if (touch.identifier === activeTouchId) {
-        return touch;
+  function createPtyTransport(): PtyTransport {
+    let socket: WebSocket | null = null;
+    let callbacks: PtyCallbacks = {};
+    const decoder = new TextDecoder();
+
+    const closeSocket = () => {
+      if (!socket) return;
+
+      socket.onopen = null;
+      socket.onclose = null;
+      socket.onerror = null;
+      socket.onmessage = null;
+      socket.close();
+      socket = null;
+    };
+
+    const handleServerMessage = (payload: string) => {
+      try {
+        const parsed = JSON.parse(payload) as
+          | { type?: "status"; shell?: string }
+          | { type?: "error"; message?: string; errors?: string[] }
+          | { type?: "exit"; code?: number };
+
+        if (parsed.type === "status") {
+          callbacks.onStatus?.(parsed.shell ?? "");
+          return true;
+        }
+
+        if (parsed.type === "error") {
+          const message = parsed.message ?? "Terminal connection failed";
+          terminalState = "error";
+          terminalError = message;
+          callbacks.onError?.(message, parsed.errors);
+          return true;
+        }
+
+        if (parsed.type === "exit") {
+          terminalState = "closed";
+          callbacks.onExit?.(parsed.code ?? 0);
+          return true;
+        }
+      } catch {
+        return false;
       }
-    }
 
-    return null;
+      return false;
+    };
+
+    return {
+      connect(options) {
+        callbacks = options.callbacks;
+        closeSocket();
+
+        terminalState = "connecting";
+        terminalError = "";
+
+        socket = new WebSocket(options.url);
+        socket.binaryType = "arraybuffer";
+
+        socket.onopen = () => {
+          terminalState = "open";
+          callbacks.onConnect?.();
+
+          if (options.cols && options.rows) {
+            socket?.send(
+              JSON.stringify({
+                type: "resize",
+                cols: options.cols,
+                rows: options.rows,
+              }),
+            );
+          }
+
+          observeTerminal();
+          if (visible) {
+            void syncActiveTerminal();
+          } else {
+            fitTerminal();
+          }
+        };
+
+        socket.onmessage = async (event) => {
+          if (typeof event.data === "string") {
+            if (!handleServerMessage(event.data)) {
+              callbacks.onData?.(event.data);
+            }
+            return;
+          }
+
+          if (event.data instanceof ArrayBuffer) {
+            callbacks.onData?.(decoder.decode(event.data, { stream: true }));
+            return;
+          }
+
+          const text = await event.data.text();
+          if (!handleServerMessage(text)) {
+            callbacks.onData?.(text);
+          }
+        };
+
+        socket.onerror = () => {
+          terminalState = "error";
+          terminalError = "Terminal connection failed";
+          callbacks.onError?.("Terminal connection failed");
+        };
+
+        socket.onclose = () => {
+          cleanupResizeObserver();
+          if (terminalState !== "error") {
+            terminalState = "closed";
+          }
+          callbacks.onDisconnect?.();
+          socket = null;
+        };
+      },
+      disconnect() {
+        closeSocket();
+      },
+      sendInput(data) {
+        if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+        socket.send(JSON.stringify({ type: "input", data }));
+        return true;
+      },
+      resize(cols, rows, meta) {
+        if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+        socket.send(
+          JSON.stringify({
+            type: "resize",
+            cols,
+            rows,
+            ...meta,
+          }),
+        );
+        return true;
+      },
+      isConnected() {
+        return socket?.readyState === WebSocket.OPEN;
+      },
+      destroy() {
+        closeSocket();
+      },
+    };
   }
 
-  function scrollFromTouch(lineDelta: number) {
-    if (!xterm || lineDelta === 0) return;
+  async function openTerminal() {
+    if (!restty || sandbox.state !== "running") return;
 
-    if (xterm.wasmTerm?.isAlternateScreen()) {
-      const sequence = lineDelta < 0 ? "\u001b[A" : "\u001b[B";
-      for (let index = 0; index < Math.abs(lineDelta); index += 1) {
-        sendInput(sequence);
-      }
-      return;
-    }
-
-    xterm.scrollLines(lineDelta);
-  }
-
-  function handleTouchStart(event: TouchEvent) {
-    if (!active || !visible || !xterm || event.touches.length !== 1) {
-      activeTouchId = null;
-      return;
-    }
-
-    const touch = event.touches[0];
-    activeTouchId = touch.identifier;
-    lastTouchY = touch.clientY;
-    touchLineRemainder = 0;
-    activatePane();
-  }
-
-  function handleTouchMove(event: TouchEvent) {
-    if (!xterm) return;
-
-    const touch = getTrackedTouch(event.touches);
-    if (!touch) return;
-
-    const lineHeight = xterm.renderer?.getMetrics().height ?? 20;
-    const touchDeltaY = touch.clientY - lastTouchY;
-    lastTouchY = touch.clientY;
-
-    const nextLineDelta = touchLineRemainder + touchDeltaY / lineHeight;
-    const wholeLineDelta =
-      nextLineDelta > 0 ? Math.floor(nextLineDelta) : Math.ceil(nextLineDelta);
-
-    if (wholeLineDelta === 0) return;
-
-    touchLineRemainder = nextLineDelta - wholeLineDelta;
-    event.preventDefault();
-
-    // A downward finger drag should reveal older terminal output.
-    scrollFromTouch(-wholeLineDelta);
-  }
-
-  function resetTouchTracking() {
-    activeTouchId = null;
-    touchLineRemainder = 0;
-  }
-
-  function handleTouchEnd(event: TouchEvent) {
-    if (activeTouchId === null) return;
-
-    if (!getTrackedTouch(event.touches)) {
-      resetTouchTracking();
-    }
-  }
-
-  function handleTouchCancel() {
-    resetTouchTracking();
+    cleanupTerminalConnection();
+    terminalState = "connecting";
+    terminalError = "";
+    restty.connectPty(getTerminalUrl());
   }
 
   onMount(() => {
@@ -275,39 +305,39 @@
     let disposed = false;
 
     void (async () => {
-      const { Terminal, FitAddon, init } = await import("ghostty-web");
+      const { Restty, parseGhosttyTheme } = await import("restty");
 
-      await init();
       if (disposed || !terminalElement) return;
 
-      ghosttyReady = true;
-      xterm = new Terminal({
-        convertEol: true,
-        cursorBlink: true,
-        fontFamily: cssVar("--font-mono", "ui-monospace, monospace"),
-        fontSize: 13,
-        scrollback: 10000,
-        theme: {
-          background: cssVar("--terminal-background", "#0b0f14"),
-          foreground: cssVar("--terminal-foreground", "#edf4ff"),
-          cursor: cssVar("--terminal-cursor", "#9ca3af"),
-          selectionBackground: cssVar("--terminal-selection", "rgba(103, 200, 255, 0.22)"),
+      ptyTransport = createPtyTransport();
+      restty = new Restty({
+        root: terminalElement,
+        createInitialPane: true,
+        appOptions: {
+          renderer: "auto",
+          fontSize: 13,
+          fontPreset: "none",
+          fontHinting: false,
+          maxScrollbackBytes: 10_000_000,
+          touchSelectionMode: "long-press",
+          ptyTransport,
         },
-      });
+        onActivePaneChange: () => {
+          activatePane();
+        },
+      }) as ResttyInstance;
 
-      fitAddon = new FitAddon();
-      xterm.loadAddon(fitAddon);
-      xterm.open(terminalElement);
+      const theme = parseGhosttyTheme(`
+foreground = ${cssVar("--terminal-foreground", "#edf4ff")}
+background = ${cssVar("--terminal-background", "#0b0f14")}
+cursor-color = ${cssVar("--terminal-cursor", "#9ca3af")}
+selection-background = ${cssVar("--terminal-selection", "rgba(103, 200, 255, 0.22)")}
+`);
+
+      restty.applyTheme(theme, "werkbench");
+      restty.setFontSize(13);
+      resttyReady = true;
       fitTerminal();
-
-      terminalElement.addEventListener("touchstart", handleTouchStart, { passive: true });
-      terminalElement.addEventListener("touchmove", handleTouchMove, { passive: false });
-      terminalElement.addEventListener("touchend", handleTouchEnd, { passive: true });
-      terminalElement.addEventListener("touchcancel", handleTouchCancel, { passive: true });
-
-      xterm.onData((input) => {
-        sendInput(input);
-      });
 
       if (sandbox.state === "running") {
         await openTerminal();
@@ -319,39 +349,36 @@
 
     return () => {
       disposed = true;
-      terminalElement?.removeEventListener("touchstart", handleTouchStart);
-      terminalElement?.removeEventListener("touchmove", handleTouchMove);
-      terminalElement?.removeEventListener("touchend", handleTouchEnd);
-      terminalElement?.removeEventListener("touchcancel", handleTouchCancel);
-      resetTouchTracking();
-      cleanupSocket();
-      xterm?.dispose();
-      xterm = null;
-      fitAddon = null;
-      ghosttyReady = false;
+      cleanupTerminalConnection();
+      ptyTransport?.destroy?.();
+      ptyTransport = null;
+      restty?.destroy();
+      restty = null;
+      resttyReady = false;
     };
   });
 
   $effect(() => {
     if (!visible) {
       cleanupResizeObserver();
+      restty?.blur();
       return;
     }
 
-    if (ghosttyReady && xterm) {
+    if (resttyReady && restty) {
       observeTerminal();
       fitTerminal();
     }
   });
 
   $effect(() => {
-    if (ghosttyReady && sandbox.state === "running" && terminalState === "idle" && xterm) {
+    if (resttyReady && sandbox.state === "running" && terminalState === "idle" && restty) {
       void openTerminal();
     }
   });
 
   $effect(() => {
-    if (ghosttyReady && active && visible && xterm) {
+    if (resttyReady && active && visible && restty) {
       void syncActiveTerminal();
     }
   });
@@ -416,6 +443,7 @@
     <div
       class="terminal-host h-full rounded-[calc(var(--radius)-0.3rem)] outline-none"
       bind:this={terminalElement}
+      tabindex="-1"
     ></div>
   </div>
 </div>
