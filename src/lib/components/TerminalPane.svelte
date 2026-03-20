@@ -322,21 +322,6 @@
         createInitialPane: true,
         fontSources: [
           {
-            type: "local",
-            matchers: [
-              "jetbrains mono nerd font",
-              "jetbrains mono",
-              "fira code nerd font",
-              "fira code",
-              "sf mono",
-              "menlo",
-              "ibm plex mono",
-              "monaco",
-              "liberation mono",
-            ],
-            label: "Local mono",
-          },
-          {
             type: "url",
             url: "https://cdn.jsdelivr.net/gh/JetBrains/JetBrainsMono@v2.304/fonts/ttf/JetBrainsMono-Regular.ttf",
             label: "JetBrains Mono",
