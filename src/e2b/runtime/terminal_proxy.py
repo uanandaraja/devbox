@@ -54,11 +54,22 @@ def shell_env() -> dict[str, str]:
     env = os.environ.copy()
     user = pwd.getpwuid(os.getuid())
     term = env.get("TERM")
+    path = env.get("PATH", "")
 
     env["HOME"] = user.pw_dir
     env["USER"] = user.pw_name
     env["LOGNAME"] = user.pw_name
     env["SHELL"] = "/usr/bin/fish"
+    env["BUN_INSTALL"] = f"{user.pw_dir}/.bun"
+    env["PATH"] = ":".join(
+        [
+            f"{user.pw_dir}/.bun/bin",
+            f"{user.pw_dir}/.local/bin",
+            f"{user.pw_dir}/.npm-global/bin",
+            f"{user.pw_dir}/.opencode/bin",
+            path,
+        ]
+    )
     env["TERM"] = (
         "xterm-256color"
         if not term or term in {"unknown", "dumb"}
