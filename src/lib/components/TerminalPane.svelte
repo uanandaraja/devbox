@@ -36,6 +36,9 @@
   let resizeObserver: ResizeObserver | null = null;
   let ghosttyReady = false;
   let focusRun = 0;
+  let activeTouchId: number | null = null;
+  let lastTouchY = 0;
+  let touchLineRemainder = 0;
 
   function cssVar(name: string, fallback: string) {
     if (typeof document === "undefined") return fallback;
@@ -64,6 +67,11 @@
   function sendResize() {
     if (!socket || socket.readyState !== WebSocket.OPEN || !xterm) return;
     socket.send(JSON.stringify({ type: "resize", cols: xterm.cols, rows: xterm.rows }));
+  }
+
+  function sendInput(data: string) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type: "input", data }));
   }
 
   function fitTerminal() {
@@ -182,6 +190,85 @@
     onActivate?.();
   }
 
+  function getTrackedTouch(touches: TouchList) {
+    if (activeTouchId === null) return null;
+
+    for (const touch of touches) {
+      if (touch.identifier === activeTouchId) {
+        return touch;
+      }
+    }
+
+    return null;
+  }
+
+  function scrollFromTouch(lineDelta: number) {
+    if (!xterm || lineDelta === 0) return;
+
+    if (xterm.wasmTerm?.isAlternateScreen()) {
+      const sequence = lineDelta < 0 ? "\u001b[A" : "\u001b[B";
+      for (let index = 0; index < Math.abs(lineDelta); index += 1) {
+        sendInput(sequence);
+      }
+      return;
+    }
+
+    xterm.scrollLines(lineDelta);
+  }
+
+  function handleTouchStart(event: TouchEvent) {
+    if (!active || !visible || !xterm || event.touches.length !== 1) {
+      activeTouchId = null;
+      return;
+    }
+
+    const touch = event.touches[0];
+    activeTouchId = touch.identifier;
+    lastTouchY = touch.clientY;
+    touchLineRemainder = 0;
+    activatePane();
+  }
+
+  function handleTouchMove(event: TouchEvent) {
+    if (!xterm) return;
+
+    const touch = getTrackedTouch(event.touches);
+    if (!touch) return;
+
+    const lineHeight = xterm.renderer?.getMetrics().height ?? 20;
+    const touchDeltaY = touch.clientY - lastTouchY;
+    lastTouchY = touch.clientY;
+
+    const nextLineDelta = touchLineRemainder + touchDeltaY / lineHeight;
+    const wholeLineDelta =
+      nextLineDelta > 0 ? Math.floor(nextLineDelta) : Math.ceil(nextLineDelta);
+
+    if (wholeLineDelta === 0) return;
+
+    touchLineRemainder = nextLineDelta - wholeLineDelta;
+    event.preventDefault();
+
+    // A downward finger drag should reveal older terminal output.
+    scrollFromTouch(-wholeLineDelta);
+  }
+
+  function resetTouchTracking() {
+    activeTouchId = null;
+    touchLineRemainder = 0;
+  }
+
+  function handleTouchEnd(event: TouchEvent) {
+    if (activeTouchId === null) return;
+
+    if (!getTrackedTouch(event.touches)) {
+      resetTouchTracking();
+    }
+  }
+
+  function handleTouchCancel() {
+    resetTouchTracking();
+  }
+
   onMount(() => {
     if (!terminalElement) return;
 
@@ -213,10 +300,13 @@
       xterm.open(terminalElement);
       fitTerminal();
 
+      terminalElement.addEventListener("touchstart", handleTouchStart, { passive: true });
+      terminalElement.addEventListener("touchmove", handleTouchMove, { passive: false });
+      terminalElement.addEventListener("touchend", handleTouchEnd, { passive: true });
+      terminalElement.addEventListener("touchcancel", handleTouchCancel, { passive: true });
+
       xterm.onData((input) => {
-        if (socket?.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ type: "input", data: input }));
-        }
+        sendInput(input);
       });
 
       if (sandbox.state === "running") {
@@ -229,6 +319,11 @@
 
     return () => {
       disposed = true;
+      terminalElement?.removeEventListener("touchstart", handleTouchStart);
+      terminalElement?.removeEventListener("touchmove", handleTouchMove);
+      terminalElement?.removeEventListener("touchend", handleTouchEnd);
+      terminalElement?.removeEventListener("touchcancel", handleTouchCancel);
+      resetTouchTracking();
       cleanupSocket();
       xterm?.dispose();
       xterm = null;

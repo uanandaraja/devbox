@@ -178,6 +178,8 @@
   .terminal-host {
     position: relative;
     overflow: hidden;
+    overscroll-behavior: contain;
+    touch-action: none;
   }
 
   .terminal-shell canvas {
