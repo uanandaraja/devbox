@@ -107,6 +107,14 @@ def read_terminal_config() -> tuple[str, str]:
     return DEFAULT_WORKDIR, DEFAULT_COMMAND
 
 
+def child_session_setup(slave_fd: int):
+    def setup() -> None:
+        os.setsid()
+        ioctl(slave_fd, termios.TIOCSCTTY, 0)
+
+    return setup
+
+
 async def handle_terminal(websocket):
     master_fd, slave_fd = pty.openpty()
     set_winsize(slave_fd, 24, 80)
@@ -117,7 +125,7 @@ async def handle_terminal(websocket):
         stdin=slave_fd,
         stdout=slave_fd,
         stderr=slave_fd,
-        start_new_session=True,
+        preexec_fn=child_session_setup(slave_fd),
         cwd=workdir,
         env=shell_env(),
     )
