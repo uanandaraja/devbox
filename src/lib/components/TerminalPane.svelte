@@ -74,6 +74,14 @@
   let resizeObserver: ResizeObserver | null = null;
   let resttyReady = false;
   let focusRun = 0;
+  let lastTermSize = $state<{ cols: number; rows: number } | null>(null);
+
+  function syncPtySize() {
+    if (!ptyTransport?.isConnected() || !lastTermSize) return;
+    if (lastTermSize.cols <= 0 || lastTermSize.rows <= 0) return;
+
+    ptyTransport.resize(lastTermSize.cols, lastTermSize.rows);
+  }
 
   function cssVar(name: string, fallback: string) {
     if (typeof document === "undefined") return fallback;
@@ -342,6 +350,12 @@
           maxScrollbackBytes: 10_000_000,
           touchSelectionMode: "long-press",
           ptyTransport,
+          callbacks: {
+            onTermSize: (cols, rows) => {
+              lastTermSize = { cols, rows };
+              syncPtySize();
+            },
+          },
         },
         onActivePaneChange: () => {
           activatePane();
@@ -359,9 +373,18 @@ selection-background = ${cssVar("--terminal-selection", "rgba(103, 200, 255, 0.2
       restty.setFontSize(16);
       resttyReady = true;
       fitTerminal();
+      syncPtySize();
 
       if (sandbox.state === "running") {
         await openTerminal();
+        requestAnimationFrame(() => {
+          fitTerminal();
+          syncPtySize();
+        });
+        setTimeout(() => {
+          fitTerminal();
+          syncPtySize();
+        }, 150);
       }
     })().catch((error) => {
       terminalState = "error";
@@ -376,6 +399,7 @@ selection-background = ${cssVar("--terminal-selection", "rgba(103, 200, 255, 0.2
       restty?.destroy();
       restty = null;
       resttyReady = false;
+      lastTermSize = null;
     };
   });
 
@@ -389,6 +413,7 @@ selection-background = ${cssVar("--terminal-selection", "rgba(103, 200, 255, 0.2
     if (resttyReady && restty) {
       observeTerminal();
       fitTerminal();
+      syncPtySize();
     }
   });
 
