@@ -169,10 +169,24 @@
 
   function closeSplitPane() {
     if (paneIds.length === 1) return;
+    const paneToKeep = paneIds.includes(activePaneId) ? activePaneId : paneIds[0];
+    paneIds = [paneToKeep];
+    activePaneId = paneToKeep;
+    splitRatio = 0.5;
+  }
 
-    const [firstPaneId] = paneIds;
-    paneIds = [firstPaneId];
-    activePaneId = firstPaneId;
+  function closePane(paneId: string) {
+    if (paneIds.length === 1) return;
+
+    const remainingPaneIds = paneIds.filter((id) => id !== paneId);
+    if (remainingPaneIds.length === 0) return;
+
+    paneIds = remainingPaneIds;
+
+    if (activePaneId === paneId) {
+      activePaneId = remainingPaneIds[remainingPaneIds.length - 1];
+    }
+
     splitRatio = 0.5;
   }
 
@@ -368,56 +382,54 @@
     </div>
   {:else}
     <div class:hidden={panelMode !== "terminal"} class="flex flex-1 overflow-hidden">
-      {#if paneIds.length === 1}
-        <TerminalPane
-          sandbox={sandbox}
-          label="Terminal 1"
-          active={active && panelMode === "terminal"}
-          visible={panelMode === "terminal"}
-          onActivate={() => setActivePane("terminal-1")}
-        />
-      {:else}
-        <div
-          class="terminal-split-grid h-full w-full"
-          bind:this={splitContainer}
-          data-layout={splitLayout}
-          style:grid-template-columns={splitLayout === "columns"
-            ? `minmax(0, ${splitRatio}fr) 0.625rem minmax(0, ${1 - splitRatio}fr)`
-            : undefined}
-          style:grid-template-rows={splitLayout === "rows"
-            ? `minmax(0, ${splitRatio}fr) 0.625rem minmax(0, ${1 - splitRatio}fr)`
-            : undefined}
-        >
-          <div class="min-h-0 min-w-0">
+      <div
+        class="terminal-split-grid h-full w-full"
+        bind:this={splitContainer}
+        data-layout={paneIds.length > 1 ? splitLayout : "single"}
+        style:grid-template-columns={paneIds.length > 1 && splitLayout === "columns"
+          ? `minmax(0, ${splitRatio}fr) 0.625rem minmax(0, ${1 - splitRatio}fr)`
+          : "minmax(0, 1fr)"}
+        style:grid-template-rows={paneIds.length > 1 && splitLayout === "rows"
+          ? `minmax(0, ${splitRatio}fr) 0.625rem minmax(0, ${1 - splitRatio}fr)`
+          : "minmax(0, 1fr)"}
+      >
+        {#each paneIds as paneId, index (paneId)}
+          <div
+            class="min-h-0 min-w-0 h-full"
+            style:grid-column={paneIds.length > 1 && splitLayout === "columns"
+              ? index === 0
+                ? "1"
+                : "3"
+              : "1"}
+            style:grid-row={paneIds.length > 1 && splitLayout === "rows"
+              ? index === 0
+                ? "1"
+                : "3"
+              : "1"}
+          >
             <TerminalPane
               sandbox={sandbox}
-              label="Terminal 1"
-              active={active && panelMode === "terminal" && activePaneId === "terminal-1"}
+              label={paneId === "terminal-1" ? "Terminal 1" : "Terminal 2"}
+              active={active && panelMode === "terminal" && activePaneId === paneId}
               visible={panelMode === "terminal"}
-              onActivate={() => setActivePane("terminal-1")}
+              closeable={paneIds.length > 1}
+              onActivate={() => setActivePane(paneId)}
+              onClose={() => closePane(paneId)}
             />
           </div>
 
-          <button
-            class="terminal-split-handle"
-            data-layout={splitLayout}
-            aria-label="Resize split panes"
-            onpointerdown={beginSplitResize}
-          ></button>
-
-          <div class="min-h-0 min-w-0 h-full">
-            <TerminalPane
-              sandbox={sandbox}
-              label="Terminal 2"
-              active={active && panelMode === "terminal" && activePaneId === "terminal-2"}
-              visible={panelMode === "terminal"}
-              closeable={true}
-              onActivate={() => setActivePane("terminal-2")}
-              onClose={closeSplitPane}
-            />
-          </div>
-        </div>
-      {/if}
+          {#if paneIds.length > 1 && index === 0}
+            <button
+              class="terminal-split-handle"
+              data-layout={splitLayout}
+              aria-label="Resize split panes"
+              style:grid-column={splitLayout === "columns" ? "2" : "1"}
+              style:grid-row={splitLayout === "rows" ? "2" : "1"}
+              onpointerdown={beginSplitResize}
+            ></button>
+          {/if}
+        {/each}
+      </div>
     </div>
 
     <div class:hidden={panelMode !== "browser"} class="flex flex-1 flex-col overflow-hidden">
