@@ -2,34 +2,26 @@
   import { tick } from "svelte";
   import { invalidateAll } from "$app/navigation";
   import type { DesktopSession, ListedSandbox } from "$lib/werkbench/types";
-  import {
-    killSandboxCommand,
-    pauseSandboxCommand,
-    resumeSandboxCommand,
-  } from "$lib/remote/werkbench.remote";
+  import { resumeSandboxCommand } from "$lib/remote/werkbench.remote";
   import { Button } from "$lib/components/ui/button/index.js";
   import TerminalPane from "$lib/components/TerminalPane.svelte";
   import {
     ArrowCounterClockwise,
     ArrowSquareOut,
     Globe,
-    Pause,
     Play,
     SquareSplitHorizontal,
     SquareSplitVertical,
     Terminal,
-    Trash,
     WarningCircle,
   } from "phosphor-svelte";
 
   let {
     sandbox,
     active = true,
-    onKilled,
   }: {
     sandbox: ListedSandbox;
     active?: boolean;
-    onKilled?: () => void;
   } = $props();
 
   let panelMode = $state<"terminal" | "browser">("terminal");
@@ -124,35 +116,6 @@
       }
     } catch (err) {
       actionError = err instanceof Error ? err.message : "Failed to resume";
-    } finally {
-      actionPending = false;
-    }
-  }
-
-  async function handlePause() {
-    actionPending = true;
-    actionError = "";
-    try {
-      await pauseSandboxCommand({ sandboxId: sandbox.sandboxID });
-      await invalidateAll();
-      resetBrowserState();
-    } catch (err) {
-      actionError = err instanceof Error ? err.message : "Failed to pause";
-    } finally {
-      actionPending = false;
-    }
-  }
-
-  async function handleKill() {
-    actionPending = true;
-    actionError = "";
-    try {
-      await killSandboxCommand({ sandboxId: sandbox.sandboxID });
-      await invalidateAll();
-      resetBrowserState();
-      onKilled?.();
-    } catch (err) {
-      actionError = err instanceof Error ? err.message : "Failed to kill";
     } finally {
       actionPending = false;
     }
@@ -332,27 +295,6 @@
           </Button>
         {/if}
       {/if}
-      {#if sandbox.state === "paused"}
-        <Button size="xs" variant="ghost" onclick={handleResume} disabled={actionPending}>
-          <Play class="size-3.5" />
-          Resume
-        </Button>
-      {:else}
-        <Button size="xs" variant="ghost" onclick={handlePause} disabled={actionPending}>
-          <Pause class="size-3.5" />
-          Pause
-        </Button>
-      {/if}
-      <Button
-        size="xs"
-        variant="ghost"
-        onclick={handleKill}
-        disabled={actionPending}
-        class="text-destructive/70 hover:text-destructive"
-        title="Kill sandbox"
-      >
-        <Trash class="size-3.5" />
-      </Button>
     </div>
   </div>
 

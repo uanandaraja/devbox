@@ -90,7 +90,6 @@
           <TerminalPanel
             sandbox={sandbox}
             active={activeSandboxId === sandbox.sandboxID}
-            onKilled={() => closeSandboxTab(sandbox.sandboxID)}
           />
         </div>
       {/each}

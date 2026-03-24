@@ -4,9 +4,11 @@
   import type { Workspace, ListedSandbox } from "$lib/werkbench/types";
   import {
     deleteWorkspaceCommand,
+    killSandboxCommand,
+    pauseSandboxCommand,
     resumeSandboxCommand,
   } from "$lib/remote/werkbench.remote";
-  import { CaretDown, CaretRight, Play, Plus, Terminal, Trash } from "phosphor-svelte";
+  import { CaretDown, CaretRight, Pause, Play, Plus, Terminal, Trash } from "phosphor-svelte";
 
   let {
     workspaces,
@@ -29,7 +31,7 @@
   } = $props();
 
   let collapsedWorkspaces = $state<Set<string>>(new Set());
-  let resumePendingSandboxId = $state<string | null>(null);
+  let sandboxActionPendingId = $state<string | null>(null);
   let actionError = $state("");
   const expandedWorkspaces = $derived.by(() => {
     const next = new Set<string>();
@@ -83,7 +85,7 @@
   async function handleResumeSandbox(event: MouseEvent, sandboxId: string) {
     event.stopPropagation();
 
-    resumePendingSandboxId = sandboxId;
+    sandboxActionPendingId = sandboxId;
     actionError = "";
 
     try {
@@ -93,8 +95,69 @@
     } catch (err) {
       actionError = err instanceof Error ? err.message : "Failed to resume sandbox";
     } finally {
-      if (resumePendingSandboxId === sandboxId) {
-        resumePendingSandboxId = null;
+      if (sandboxActionPendingId === sandboxId) {
+        sandboxActionPendingId = null;
+      }
+    }
+  }
+
+  async function removeSandboxFromRoute(sandboxId: string) {
+    const params = new URLSearchParams(page.url.searchParams);
+    const remainingIds = params.getAll("sandbox").filter((id) => id !== sandboxId);
+
+    params.delete("sandbox");
+    for (const id of remainingIds) {
+      params.append("sandbox", id);
+    }
+
+    if (params.get("active") === sandboxId) {
+      if (remainingIds.length > 0) {
+        params.set("active", remainingIds[remainingIds.length - 1]);
+      } else {
+        params.delete("active");
+      }
+    }
+
+    const query = params.toString();
+    await goto(query ? `/?${query}` : "/", { replaceState: false });
+  }
+
+  async function handlePauseSandbox(event: MouseEvent, sandboxId: string) {
+    event.stopPropagation();
+
+    sandboxActionPendingId = sandboxId;
+    actionError = "";
+
+    try {
+      await pauseSandboxCommand({ sandboxId });
+      await invalidateAll();
+    } catch (err) {
+      actionError = err instanceof Error ? err.message : "Failed to pause sandbox";
+    } finally {
+      if (sandboxActionPendingId === sandboxId) {
+        sandboxActionPendingId = null;
+      }
+    }
+  }
+
+  async function handleKillSandbox(event: MouseEvent, sandboxId: string) {
+    event.stopPropagation();
+
+    const confirmed = window.confirm("Kill this sandbox?");
+    if (!confirmed) return;
+
+    sandboxActionPendingId = sandboxId;
+    actionError = "";
+
+    try {
+      await killSandboxCommand({ sandboxId });
+      await removeSandboxFromRoute(sandboxId);
+      await invalidateAll();
+    } catch (err) {
+      actionError = err instanceof Error ? err.message : "Failed to kill sandbox";
+    } finally {
+      if (sandboxActionPendingId === sandboxId) {
+        sandboxActionPendingId = null;
       }
     }
   }
@@ -160,10 +223,10 @@
 
       <div class="mb-0.5 px-1.5">
         <!-- Workspace header row -->
-        <div class="group flex items-center gap-1">
+        <div class="group flex items-center gap-1 rounded-md transition-colors hover:bg-field">
           <button
             onclick={() => toggleWorkspace(workspace.id)}
-            class="flex flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-field"
+            class="flex flex-1 items-center gap-2 px-2 py-1.5 text-left"
           >
             <div
               class="flex size-5 flex-shrink-0 items-center justify-center rounded text-[11px] font-bold text-black/70"
@@ -174,11 +237,6 @@
             <span class="flex-1 truncate text-[13px] font-medium text-foreground/75">
               {workspace.name}
             </span>
-            {#if isExpanded}
-              <CaretDown class="size-3 flex-shrink-0 text-foreground/30" />
-            {:else}
-              <CaretRight class="size-3 flex-shrink-0 text-foreground/30" />
-            {/if}
           </button>
 
           <button
@@ -189,6 +247,19 @@
             aria-label={`Delete ${workspace.name}`}
           >
             <Trash class="size-3.5" />
+          </button>
+
+          <button
+            type="button"
+            class="flex size-7 flex-shrink-0 items-center justify-center rounded-md text-foreground/30 transition-colors hover:text-foreground/60"
+            onclick={() => toggleWorkspace(workspace.id)}
+            aria-label={isExpanded ? `Collapse ${workspace.name}` : `Expand ${workspace.name}`}
+          >
+            {#if isExpanded}
+              <CaretDown class="size-3" />
+            {:else}
+              <CaretRight class="size-3" />
+            {/if}
           </button>
         </div>
 
@@ -207,12 +278,16 @@
             <!-- Sandbox list -->
             {#each wSandboxes as sandbox (sandbox.sandboxID)}
               {@const isSelected = selectedSandboxId === sandbox.sandboxID}
-              <div class="flex items-center gap-1">
+              <div
+                class="group flex items-center gap-1 rounded-md transition-colors {isSelected
+                  ? 'bg-surface-selected'
+                  : 'hover:bg-field/80'}"
+              >
                 <button
                   onclick={() => selectSandbox(sandbox.sandboxID)}
-                  class="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors {isSelected
-                    ? 'bg-surface-selected text-foreground'
-                    : 'text-foreground/45 hover:bg-field/80 hover:text-foreground/70'}"
+                  class="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left transition-colors {isSelected
+                    ? 'text-foreground'
+                    : 'text-foreground/45 hover:text-foreground/70'}"
                 >
                   <div
                     class="size-1.5 flex-shrink-0 rounded-full {sandbox.state === 'running'
@@ -225,18 +300,42 @@
                   </span>
                 </button>
 
-                {#if sandbox.state === "paused"}
+                <div class="mr-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                  {#if sandbox.state === "paused"}
+                    <button
+                      type="button"
+                      class="flex size-6 flex-shrink-0 items-center justify-center rounded-md text-foreground/35 transition-colors hover:bg-field hover:text-foreground/65 disabled:cursor-not-allowed disabled:opacity-50"
+                      onclick={(event) => handleResumeSandbox(event, sandbox.sandboxID)}
+                      disabled={sandboxActionPendingId !== null}
+                      title="Resume sandbox"
+                      aria-label={`Resume ${sandbox.sandboxID}`}
+                    >
+                      <Play class="size-3" weight="fill" />
+                    </button>
+                  {:else}
+                    <button
+                      type="button"
+                      class="flex size-6 flex-shrink-0 items-center justify-center rounded-md text-foreground/35 transition-colors hover:bg-field hover:text-foreground/65 disabled:cursor-not-allowed disabled:opacity-50"
+                      onclick={(event) => handlePauseSandbox(event, sandbox.sandboxID)}
+                      disabled={sandboxActionPendingId !== null}
+                      title="Pause sandbox"
+                      aria-label={`Pause ${sandbox.sandboxID}`}
+                    >
+                      <Pause class="size-3" />
+                    </button>
+                  {/if}
+
                   <button
                     type="button"
-                    class="flex size-6 flex-shrink-0 items-center justify-center rounded-md text-foreground/35 transition-colors hover:bg-field hover:text-foreground/65 disabled:cursor-not-allowed disabled:opacity-50"
-                    onclick={(event) => handleResumeSandbox(event, sandbox.sandboxID)}
-                    disabled={resumePendingSandboxId !== null}
-                    title="Resume sandbox"
-                    aria-label={`Resume ${sandbox.sandboxID}`}
+                    class="flex size-6 flex-shrink-0 items-center justify-center rounded-md text-destructive/55 transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
+                    onclick={(event) => handleKillSandbox(event, sandbox.sandboxID)}
+                    disabled={sandboxActionPendingId !== null}
+                    title="Kill sandbox"
+                    aria-label={`Kill ${sandbox.sandboxID}`}
                   >
-                    <Play class="size-3" weight="fill" />
+                    <Trash class="size-3" />
                   </button>
-                {/if}
+                </div>
               </div>
             {/each}
 
