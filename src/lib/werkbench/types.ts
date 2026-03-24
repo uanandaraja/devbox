@@ -47,10 +47,20 @@ export type SandboxDetail = {
   templateID: string;
 };
 
-export type DesktopSession = {
+export type PreviewCandidate = {
+  port: number;
+  url: string;
+  active: boolean;
+};
+
+export type BrowserSession = {
   sandboxId: string;
-  status: "idle" | "starting" | "open" | "error";
+  status: "idle" | "starting" | "open" | "empty" | "error";
+  selectedPort?: number;
   url?: string;
+  devtoolsUrl?: string;
+  candidates: PreviewCandidate[];
+  message?: string;
 };
 
 export type DashboardData = {

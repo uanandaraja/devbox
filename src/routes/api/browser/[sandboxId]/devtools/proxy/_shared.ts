@@ -1,30 +1,9 @@
 import {
+  getSandboxBrowserDevtoolsUpstreamUrl,
   getSandboxDetail,
-  getSandboxDesktopAuthHeader,
-  getSandboxDesktopUpstreamUrl,
 } from "$lib/server/e2b/client";
 
-function rewriteLocation(
-  location: string,
-  requestUrl: URL,
-  sandboxId: string,
-  upstreamOrigin: string,
-) {
-  const resolved = new URL(location, upstreamOrigin);
-
-  if (resolved.origin !== upstreamOrigin) {
-    return location;
-  }
-
-  const rewritten = new URL(
-    `/api/desktop/${sandboxId}/proxy${resolved.pathname}`,
-    requestUrl.origin,
-  );
-  rewritten.search = resolved.search;
-  return rewritten.toString();
-}
-
-export async function proxyDesktopRequest(
+export async function proxyBrowserDevtoolsRequest(
   request: Request,
   platform: App.Platform,
   sandboxId: string,
@@ -37,11 +16,12 @@ export async function proxyDesktopRequest(
   }
 
   const requestUrl = new URL(request.url);
-  const targetUrl = new URL(getSandboxDesktopUpstreamUrl(platform.env, sandbox, path));
+  const targetUrl = new URL(
+    getSandboxBrowserDevtoolsUpstreamUrl(platform.env, sandbox, path),
+  );
   targetUrl.search = requestUrl.search;
 
   const headers = new Headers(request.headers);
-  headers.set("authorization", getSandboxDesktopAuthHeader(platform.env, sandboxId));
   headers.set("host", targetUrl.host);
 
   if (headers.has("origin")) {
@@ -64,16 +44,14 @@ export async function proxyDesktopRequest(
   }
 
   const upstreamResponse = await fetch(new Request(targetUrl.toString(), init));
-  const responseHeaders = new Headers(upstreamResponse.headers);
-  responseHeaders.delete("www-authenticate");
 
-  const location = responseHeaders.get("location");
-  if (location) {
-    responseHeaders.set(
-      "location",
-      rewriteLocation(location, requestUrl, sandboxId, targetUrl.origin),
-    );
+  if (upstreamResponse.status === 101) {
+    return upstreamResponse;
   }
+
+  const responseHeaders = new Headers(upstreamResponse.headers);
+  responseHeaders.delete("x-frame-options");
+  responseHeaders.delete("content-security-policy");
 
   return new Response(upstreamResponse.body, {
     status: upstreamResponse.status,

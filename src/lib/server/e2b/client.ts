@@ -1,19 +1,27 @@
-import { Buffer } from "node:buffer";
-import { createHash } from "node:crypto";
 import { Sandbox } from "e2b";
 import type {
-  DesktopSession,
+  BrowserSession,
   ListedSandbox,
+  PreviewCandidate,
   SandboxDetail,
   Workspace,
 } from "$lib/werkbench/types";
 import type { PlatformEnv, WorkspaceLaunchEnv } from "$lib/server/env";
 
-const defaultDesktopPort = 6901;
-const defaultDesktopWebPort = 6902;
+const defaultBrowserDebugPort = 9222;
+const defaultBrowserProxyPort = 8090;
 const defaultDomain = "e2b.app";
+const defaultPreviewPorts = [3000, 3001, 4173, 5173, 8000, 8080, 8787, 4321];
 const defaultTerminalPort = 7681;
-const desktopUsername = "werkbench";
+
+type ChromeDebugTarget = {
+  id: string;
+  type: string;
+  title: string;
+  url: string;
+  devtoolsFrontendUrl?: string;
+  webSocketDebuggerUrl?: string;
+};
 
 function getDomain(env: PlatformEnv) {
   return env.E2B_DOMAIN || defaultDomain;
@@ -31,12 +39,26 @@ function getDefaultTimeoutMs(env: PlatformEnv) {
   return Number(env.E2B_SANDBOX_TIMEOUT_MS ?? 3600000);
 }
 
-function getDesktopPort(env: PlatformEnv) {
-  return Number(env.E2B_DESKTOP_PORT ?? defaultDesktopPort);
+function getBrowserDebugPort(env: PlatformEnv) {
+  return Number(env.E2B_BROWSER_DEBUG_PORT ?? defaultBrowserDebugPort);
 }
 
-function getDesktopWebPort(env: PlatformEnv) {
-  return Number(env.E2B_DESKTOP_WEB_PORT ?? defaultDesktopWebPort);
+function getBrowserProxyPort(env: PlatformEnv) {
+  return Number(env.E2B_BROWSER_PROXY_PORT ?? defaultBrowserProxyPort);
+}
+
+function getPreviewPorts(env: PlatformEnv) {
+  const raw = env.E2B_PREVIEW_PORTS?.trim();
+  if (!raw) {
+    return defaultPreviewPorts;
+  }
+
+  const ports = raw
+    .split(",")
+    .map((value) => Number(value.trim()))
+    .filter((value) => Number.isInteger(value) && value > 0);
+
+  return ports.length > 0 ? [...new Set(ports)] : defaultPreviewPorts;
 }
 
 function getTerminalPort(env: PlatformEnv) {
@@ -142,11 +164,79 @@ function shellEscape(value: string) {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-function getDesktopPassword(env: PlatformEnv, sandboxId: string) {
-  return createHash("sha256")
-    .update(`${env.E2B_API_KEY}:${sandboxId}:desktop`)
-    .digest("hex")
-    .slice(0, 32);
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  timeoutMs: number,
+) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function getPreviewUrl(
+  env: PlatformEnv,
+  sandbox: Pick<SandboxDetail, "domain" | "sandboxID">,
+  port: number,
+) {
+  return getSandboxPortHttpUrl(env, sandbox, port, "/");
+}
+
+export async function detectSandboxPreviewCandidates(
+  env: PlatformEnv,
+  sandbox: Pick<SandboxDetail, "domain" | "sandboxID">,
+) {
+  const ports = getPreviewPorts(env);
+
+  try {
+    const connection = await Sandbox.connect(sandbox.sandboxID, {
+      apiKey: env.E2B_API_KEY,
+      domain: env.E2B_DOMAIN,
+      timeoutMs: getDefaultTimeoutMs(env),
+    });
+    const probeScript = ports
+      .map(
+        (port) =>
+          `code="$(curl -sS -o /dev/null --max-time 1 -w '%{http_code}' http://localhost:${port}/ || true)"; if [ "$code" = "000" ]; then echo "${port}:inactive"; else echo "${port}:active"; fi`,
+      )
+      .join("; ");
+    const result = await connection.commands.run(probeScript, {
+      user: "root",
+      timeoutMs: 15000,
+    });
+    const activeByPort = new Map<number, boolean>();
+    for (const line of result.stdout.split("\n")) {
+      const [portRaw, state] = line.trim().split(":");
+      const port = Number(portRaw);
+      if (Number.isInteger(port)) {
+        activeByPort.set(port, state === "active");
+      }
+    }
+
+    return ports.map((port) => ({
+      port,
+      url: getPreviewUrl(env, sandbox, port),
+      active: activeByPort.get(port) ?? false,
+    }));
+  } catch {
+    return ports.map((port) => ({
+      port,
+      url: getPreviewUrl(env, sandbox, port),
+      active: false,
+    }));
+  }
 }
 
 async function provisionWorkspaceSandbox(
@@ -220,8 +310,6 @@ export async function createSandbox(env: WorkspaceLaunchEnv, workspace: Workspac
         repoFullName: `${workspace.owner}/${workspace.repo}`,
       },
       envVars: {
-        E2B_DESKTOP_PORT: String(getDesktopPort(env)),
-        E2B_DESKTOP_WEB_PORT: String(getDesktopWebPort(env)),
         E2B_TERMINAL_PORT: String(getTerminalPort(env)),
       },
     }),
@@ -274,36 +362,38 @@ export function getSandboxTerminalUrl(
   return `wss://${getSandboxHost(env, sandbox, getTerminalPort(env))}`;
 }
 
-export function getSandboxDesktopUpstreamUrl(
+function getSandboxChromeDebugUrl(
   env: PlatformEnv,
   sandbox: Pick<SandboxDetail, "domain" | "sandboxID">,
-  path = "/",
+  path = "/json/version",
 ) {
-  const desktopUrl = new URL(
-    getSandboxPortHttpUrl(env, sandbox, getDesktopWebPort(env), path),
-  );
-
-  // Fit the desktop inside the app iframe and hide Kasm's left control handle.
-  desktopUrl.searchParams.set("autoconnect", "1");
-  desktopUrl.searchParams.set("resize", "scale");
-  desktopUrl.searchParams.set("show_control_bar", "0");
-
-  return desktopUrl.toString();
+  return getSandboxPortHttpUrl(env, sandbox, getBrowserDebugPort(env), path);
 }
 
-export function getSandboxDesktopProxyUrl(sandboxId: string, path = "/") {
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  return `/api/desktop/${sandboxId}/proxy${normalizedPath}`;
-}
-
-export function getSandboxDesktopAuthHeader(env: PlatformEnv, sandboxId: string) {
-  const credentials = `${desktopUsername}:${getDesktopPassword(env, sandboxId)}`;
-  return `Basic ${Buffer.from(credentials).toString("base64")}`;
-}
-
-async function ensureSandboxDesktop(
+async function fetchChromeDebugJson<T>(
   env: PlatformEnv,
   sandbox: Pick<SandboxDetail, "domain" | "sandboxID">,
+  path: string,
+) {
+  const response = await fetch(getSandboxChromeDebugUrl(env, sandbox, path), {
+    method: "GET",
+    headers: {
+      Accept: "application/json,text/plain,*/*",
+    },
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`Chrome debug ${response.status}: ${message || response.statusText}`);
+  }
+
+  return response.json() as Promise<T>;
+}
+
+async function ensureSandboxBrowser(
+  env: PlatformEnv,
+  sandbox: Pick<SandboxDetail, "domain" | "sandboxID">,
+  targetUrl: string,
 ) {
   const connection = await Sandbox.connect(sandbox.sandboxID, {
     apiKey: env.E2B_API_KEY,
@@ -311,31 +401,115 @@ async function ensureSandboxDesktop(
     timeoutMs: getDefaultTimeoutMs(env),
   });
 
-  await connection.commands.run("/usr/local/bin/start-desktop.sh", {
+  await connection.commands.run("/usr/local/bin/start-browser.sh", {
     user: "root",
     envs: {
-      E2B_DESKTOP_PASSWORD: getDesktopPassword(env, sandbox.sandboxID),
-      E2B_DESKTOP_PORT: String(getDesktopPort(env)),
-      E2B_DESKTOP_WEB_PORT: String(getDesktopWebPort(env)),
-      E2B_DESKTOP_USER: desktopUsername,
+      E2B_BROWSER_DEBUG_PORT: String(getBrowserDebugPort(env)),
+      E2B_BROWSER_PROXY_PORT: String(getBrowserProxyPort(env)),
+      E2B_BROWSER_TARGET_PORT: String(new URL(targetUrl).port || 80),
+      E2B_BROWSER_START_URL: targetUrl,
     },
-    timeoutMs: 90000,
+    timeoutMs: 60000,
   });
 }
 
-export async function getSandboxDesktopSession(
+async function getChromeTargets(
+  env: PlatformEnv,
+  sandbox: Pick<SandboxDetail, "domain" | "sandboxID">,
+) {
+  return fetchChromeDebugJson<ChromeDebugTarget[]>(env, sandbox, "/json/list");
+}
+
+async function waitForChromeTarget(
+  env: PlatformEnv,
+  sandbox: Pick<SandboxDetail, "domain" | "sandboxID">,
+  targetUrl: string,
+) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const targets = await getChromeTargets(env, sandbox).catch(() => [] as ChromeDebugTarget[]);
+    const target =
+      targets.find((entry) => entry.type === "page" && entry.url === targetUrl) ??
+      targets.find((entry) => entry.type === "page");
+
+    if (target && (target.devtoolsFrontendUrl || target.webSocketDebuggerUrl || target.id)) {
+      return target;
+    }
+
+    await delay(500);
+  }
+
+  throw new Error("Chrome debug target did not become ready");
+}
+
+function getProxyWebSocketPath(sandboxId: string, targetPath: string) {
+  return `/api/browser/${sandboxId}/devtools/proxy${targetPath}`;
+}
+
+function rewriteDevtoolsFrontendUrl(sandboxId: string, frontendPath: string) {
+  const frontendUrl = new URL(frontendPath, "https://chrome-devtools-frontend.appspot.com");
+  const ws = frontendUrl.searchParams.get("ws");
+
+  if (ws) {
+    const wsUrl = new URL(`ws://${ws}`);
+    frontendUrl.searchParams.set("ws", getProxyWebSocketPath(sandboxId, wsUrl.pathname));
+  }
+
+  const query = frontendUrl.searchParams.toString();
+  return `/api/browser/devtools/frontend${frontendUrl.pathname}${query ? `?${query}` : ""}`;
+}
+
+export function getSandboxPreviewProxyUrl(
+  env: PlatformEnv,
+  sandbox: Pick<SandboxDetail, "domain" | "sandboxID">,
+) {
+  return getSandboxPortHttpUrl(env, sandbox, getBrowserProxyPort(env), "/");
+}
+
+export function getSandboxBrowserDevtoolsUpstreamUrl(
+  env: PlatformEnv,
+  sandbox: Pick<SandboxDetail, "domain" | "sandboxID">,
+  path = "/json/version",
+) {
+  return getSandboxChromeDebugUrl(env, sandbox, path);
+}
+
+export async function getSandboxBrowserSession(
   env: PlatformEnv,
   sandbox: Pick<SandboxDetail, "domain" | "sandboxID" | "state">,
-): Promise<DesktopSession> {
+  requestedPort?: number,
+): Promise<BrowserSession> {
   if (sandbox.state !== "running") {
     throw new Error("Sandbox is not running");
   }
 
-  await ensureSandboxDesktop(env, sandbox);
+  const candidates = await detectSandboxPreviewCandidates(env, sandbox);
+  const defaultCandidate = candidates.find((candidate) => candidate.active);
+  const selectedPort = requestedPort ?? defaultCandidate?.port;
+
+  if (!selectedPort) {
+    return {
+      sandboxId: sandbox.sandboxID,
+      status: "empty",
+      candidates,
+      message: "No preview detected. Start your app on 0.0.0.0 and choose a port.",
+    };
+  }
+
+  const targetUrl = `http://localhost:${selectedPort}/`;
+
+  await ensureSandboxBrowser(env, sandbox, targetUrl);
+  const target = await waitForChromeTarget(env, sandbox, targetUrl);
 
   return {
     sandboxId: sandbox.sandboxID,
     status: "open",
-    url: getSandboxDesktopUpstreamUrl(env, sandbox, "/"),
+    selectedPort,
+    url: getSandboxPreviewProxyUrl(env, sandbox),
+    devtoolsUrl: rewriteDevtoolsFrontendUrl(
+      sandbox.sandboxID,
+      target.devtoolsFrontendUrl ??
+        `/devtools/inspector.html?ws=${getProxyWebSocketPath(sandbox.sandboxID, `/devtools/page/${target.id}`)}`,
+    ),
+    candidates,
   };
 }

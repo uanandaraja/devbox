@@ -1,13 +1,18 @@
 import { error } from "@sveltejs/kit";
 import type { RequestHandler } from "./$types";
-import { proxyDesktopRequest } from "./_shared";
+import { proxyBrowserDevtoolsRequest } from "../_shared";
 
 const handler: RequestHandler = async ({ params, platform, request }) => {
   if (!platform) {
     throw error(500, "Cloudflare platform unavailable");
   }
 
-  return proxyDesktopRequest(request, platform, params.sandboxId, "/");
+  return proxyBrowserDevtoolsRequest(
+    request,
+    platform,
+    params.sandboxId,
+    `/${params.path}`,
+  );
 };
 
 export const GET = handler;

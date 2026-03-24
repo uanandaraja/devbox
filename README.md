@@ -13,11 +13,11 @@ E2B_API_KEY=
 GITHUB_TOKEN=
 ```
 
-desktop defaults:
+browser defaults:
 
 ```bash
-E2B_DESKTOP_PORT=6901
-E2B_DESKTOP_WEB_PORT=6902
+E2B_BROWSER_DEBUG_PORT=9222
+E2B_PREVIEW_PORTS=3000,3001,4173,5173,8000,8080,8787,4321
 E2B_TEMPLATE_CPU_COUNT=4
 E2B_TEMPLATE_MEMORY_MB=8192
 ```
@@ -65,7 +65,7 @@ bun run sandbox:ssh <sandbox-id>
 browser tab:
 
 ```bash
-browser opens a full remote desktop session
-chrome starts inside that desktop
-native chrome devtools run there
+browser opens the sandbox app directly in-app
+chrome runs headless inside the sandbox for devtools
+devtools are docked below the preview
 ```

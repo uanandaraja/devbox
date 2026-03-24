@@ -41,14 +41,6 @@ const aptPackages = [
   "gnupg",
   "gpg",
   "gh",
-  "dbus-x11",
-  "openbox",
-  "xfce4",
-  "xfce4-terminal",
-  "xauth",
-  "xfonts-base",
-  "x11-xserver-utils",
-  "wmctrl",
 ];
 
 const userEnv = [
@@ -71,11 +63,15 @@ export const template = Template()
   .fromUbuntuImage("24.04")
   .setUser("root")
   .copy(
-    "runtime/start-desktop.sh",
-    "/usr/local/bin/start-desktop.sh",
+    "runtime/start-browser.sh",
+    "/usr/local/bin/start-browser.sh",
     { user: "root", mode: 0o755 },
   )
-  .copy("runtime/desktop_proxy.py", "/usr/local/bin/desktop_proxy.py", {
+  .copy("runtime/browser_debug_proxy.py", "/usr/local/bin/browser_debug_proxy.py", {
+    user: "root",
+    mode: 0o755,
+  })
+  .copy("runtime/browser_preview_proxy.py", "/usr/local/bin/browser_preview_proxy.py", {
     user: "root",
     mode: 0o755,
   })
@@ -101,15 +97,6 @@ export const template = Template()
     mode: 0o755,
   })
   .aptInstall(aptPackages)
-  .runCmd(
-    [
-      "curl -fsSL -o /tmp/kasmvncserver.deb https://github.com/kasmtech/KasmVNC/releases/download/v1.4.0/kasmvncserver_noble_1.4.0_amd64.deb",
-      "apt-get update",
-      "apt-get install -y --no-install-recommends /tmp/kasmvncserver.deb",
-      "rm -f /tmp/kasmvncserver.deb",
-      "rm -rf /var/lib/apt/lists/*",
-    ].join(" && "),
-  )
   .runCmd(
     [
       "mkdir -p /etc/apt/keyrings",
@@ -194,7 +181,6 @@ export const template = Template()
       "if [ -x \"$HOME/.local/bin/claude\" ]; then $HOME/.local/bin/claude --version; else echo 'claude-not-installed'; fi",
       "$HOME/.opencode/bin/opencode --version",
       "/usr/local/bin/websocat --version | head -n 1",
-      "dpkg -s kasmvncserver | grep '^Version:'",
       "google-chrome-stable --version",
     ].join(" && "),
   )
