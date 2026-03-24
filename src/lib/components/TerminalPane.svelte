@@ -76,11 +76,33 @@
   let focusRun = 0;
   let lastTermSize = $state<{ cols: number; rows: number } | null>(null);
 
+  function nextFrame() {
+    return new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+  }
+
   function syncPtySize() {
     if (!ptyTransport?.isConnected() || !lastTermSize) return;
     if (lastTermSize.cols <= 0 || lastTermSize.rows <= 0) return;
 
     ptyTransport.resize(lastTermSize.cols, lastTermSize.rows);
+  }
+
+  async function ensureMeasuredTerminalSize() {
+    if (!restty || !visible) return;
+
+    observeTerminal();
+    fitTerminal();
+
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      await nextFrame();
+      fitTerminal();
+
+      if (lastTermSize && lastTermSize.cols > 0 && lastTermSize.rows > 0) {
+        return;
+      }
+    }
   }
 
   function cssVar(name: string, fallback: string) {
@@ -216,6 +238,8 @@
           terminalState = "open";
           callbacks.onConnect?.();
 
+          syncPtySize();
+
           if (options.cols && options.rows) {
             socket?.send(
               JSON.stringify({
@@ -303,6 +327,7 @@
     cleanupTerminalConnection();
     terminalState = "connecting";
     terminalError = "";
+    await ensureMeasuredTerminalSize();
     restty.connectPty(getTerminalUrl());
   }
 
