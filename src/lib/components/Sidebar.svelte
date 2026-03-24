@@ -265,7 +265,7 @@
 
         <!-- Expanded: sandboxes + launch button -->
         {#if isExpanded}
-          <div class="ml-[1.125rem] border-l border-sidebar-divider pl-3">
+          <div class="ml-2 border-l border-sidebar-divider pl-2">
             <!-- New sandbox button -->
             <button
               onclick={() => onLaunchWorkspace(workspace)}
